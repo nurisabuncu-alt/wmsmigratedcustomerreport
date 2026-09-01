@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>WMS migrated customer reporting</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <h1>WMS migrated customer reporting</h1>
+      <p class="lede">Snapshot of created vs shipped warehouse orders, Jun 2024 – Aug 2026. Not a live database feed. Anyone with this URL can see these volumes.</p>
+      <div class="tabs" role="tablist">
+        <button id="tab-dashboard" class="tab active" type="button">WMS migrated customer dashboard</button>
+        <button id="tab-datastudio" class="tab" type="button">Data Studio report</button>
+      </div>
+    </header>
+    <div id="app"></div>
+  </main>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
