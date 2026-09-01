@@ -149,7 +149,7 @@ function seriesSum(rows, key) {
 // Dashboard-tab data (period totals per database and per company).
 // ---------------------------------------------------------------------------
 
-// DB_TOTALS derived at runtime`nconst DB_TOTALS = [
+const DB_TOTALS = [
   { db: "DeliverrLiveDB", created: 12206615, shipped: 12008992 },
   { db: "LOGIWATECH", created: 4535724, shipped: 2683257 },
   { db: "PROD3PL", created: 3305610, shipped: 2810568 },

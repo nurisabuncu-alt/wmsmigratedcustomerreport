@@ -1,6 +1,8 @@
 (function () {
   var charts = [];
 
+  Chart.defaults.datasets.bar.maxBarThickness = 64;
+
   function fmt(n) {
     if (n >= 1000000) return (n / 1000000).toFixed(2) + "M";
     if (n >= 1000) return (n / 1000).toFixed(1) + "K";
