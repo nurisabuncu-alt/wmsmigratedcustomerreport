@@ -150,49 +150,13 @@
     return { decliners: decliners, growers: growers };
   }
 
-  var COMPANY_TOTALS = (function () {
-    var byKey = {};
-    COMPANIES.forEach(function (row) {
-      var company = entityCompany(row);
-      var key = row.db + "|" + company;
-      if (!byKey[key]) byKey[key] = { db: row.db, company: company, created: row.created, shipped: row.shipped };
-      else {
-        byKey[key].created += row.created;
-        byKey[key].shipped += row.shipped;
-      }
-    });
-    return Object.keys(byKey).map(function (k) {
-      var r = byKey[k];
-      r.fill = r.created === 0 ? 0 : (100 * r.shipped) / r.created;
-      return r;
-    }).sort(function (a, b) { return b.shipped - a.shipped; });
-  })();
-
-  var FLEXPORT_TTM = (function () {
-    var shipped = seriesSum(ENTITIES.filter(function (r) { return r.company === "Flexport"; }), "shipped");
-    return { prev: sumRange(shipped, 3, 14), curr: sumRange(shipped, 15, 26) };
-  })();
-
-  var CONT_TTM_PREV_CREATED = sumRange(CONT_CREATED, 3, 14);
-  var CONT_TTM_CURR_CREATED = sumRange(CONT_CREATED, 15, 26);
-  var CONT_TTM_PREV_SHIPPED = sumRange(CONT_SHIPPED, 3, 14);
-  var CONT_TTM_CURR_SHIPPED = sumRange(CONT_SHIPPED, 15, 26);
-  var CONT_TTM_YOY_CREATED = pctChange(CONT_TTM_CURR_CREATED, CONT_TTM_PREV_CREATED);
-  var CONT_TTM_YOY_SHIPPED = pctChange(CONT_TTM_CURR_SHIPPED, CONT_TTM_PREV_SHIPPED);
-  var CONT_TTM_PREV_FILL = (100 * CONT_TTM_PREV_SHIPPED) / CONT_TTM_PREV_CREATED;
-  var CONT_TTM_CURR_FILL = (100 * CONT_TTM_CURR_SHIPPED) / CONT_TTM_CURR_CREATED;
-  var CONT_LAST_FULL_YOY_SHIPPED = pctChange(CONT_SHIPPED[26], CONT_SHIPPED[14]);
-  var CONT_LAST_FULL_YOY_CREATED = pctChange(CONT_CREATED[26], CONT_CREATED[14]);
-
   var state = {
     tab: "dashboard",
     db: "all",
     company: "all",
+    client: "all",
     quarter: "all",
     month: "none",
-    dsDb: "all",
-    dsCompany: "all",
-    dsClient: "all",
   };
 
   function destroyCharts() {
@@ -204,9 +168,14 @@
   }
   function lineOrBar(labels, datasets) {
     var type = labels.length < 2 ? "bar" : "line";
+    var chartDatasets = datasets.map(function (dataset) {
+      var copy = Object.assign({}, dataset);
+      if (type === "bar" && copy.borderColor) copy.backgroundColor = copy.borderColor;
+      return copy;
+    });
     return {
       type: type,
-      data: { labels: labels, datasets: datasets },
+      data: { labels: labels, datasets: chartDatasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -289,13 +258,19 @@
     var selectedRange = resolvePeriod(state.quarter, state.month);
     var from = selectedRange.from, to = selectedRange.to;
     var monthLabels = MONTH_LABELS.slice(from, to + 1);
-    var inDatabase = state.db === "all" ? COMPANY_TOTALS : COMPANY_TOTALS.filter(function (r) { return r.db === state.db; });
-    var companyOptions = inDatabase.map(function (r) { return r.company; });
+    var inDatabase = state.db === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.db; });
+    var companyOptions = [];
+    inDatabase.forEach(function (r) { if (companyOptions.indexOf(r.company) < 0) companyOptions.push(r.company); });
+    companyOptions.sort();
     if (state.company !== "all" && companyOptions.indexOf(state.company) < 0) state.company = "all";
+    var inCompany = state.company === "all" ? inDatabase : inDatabase.filter(function (r) { return r.company === state.company; });
+    var clientOptions = [];
+    inCompany.forEach(function (r) { if (r.client && clientOptions.indexOf(r.client) < 0) clientOptions.push(r.client); });
+    clientOptions.sort();
+    if (state.client !== "all" && clientOptions.indexOf(state.client) < 0) state.client = "all";
 
-    var scopeEntities = ENTITIES.slice();
-    if (state.db !== "all") scopeEntities = scopeEntities.filter(function (r) { return r.db === state.db; });
-    if (state.company !== "all") scopeEntities = scopeEntities.filter(function (r) { return r.company === state.company; });
+    var scopeEntities = inCompany;
+    if (state.client !== "all") scopeEntities = scopeEntities.filter(function (r) { return r.client === state.client; });
 
     var filtered = periodTotals(scopeEntities, from, to);
     var scopeCreated = seriesSum(scopeEntities, "created");
@@ -326,20 +301,22 @@
     var yoyLabel = isAllTime ? "YoY (Aug 2026 vs Aug 2025)" : isMonth ? "YoY vs same month last year" : "YoY vs same quarter last year";
     var seqLabel = isAllTime ? "MoM (Aug vs Jul 2026)" : isMonth ? "vs prior month" : "vs prior quarter";
     var clientsYoy = from >= 12 ? pctChange(peakIn(scopeClients, from, to), peakIn(scopeClients, from - 12, to - 12)) : 0;
-    var ttmYoy = pctChange(TTM_CURR_SHIPPED, TTM_PREV_SHIPPED);
-    var continuingYoy = pctChange(CONTINUING_CURR, CONTINUING_PREV);
-    var flexportShareOfDrop = (100 * (FLEXPORT_TTM.prev - FLEXPORT_TTM.curr)) / (TTM_PREV_SHIPPED - TTM_CURR_SHIPPED);
-    var scopeLabel = state.company !== "all" && filtered.length === 1 ? state.company : state.db === "all" ? "all databases" : state.db;
-    var portfolioView = state.company === "all";
+    var scopeLabel = state.client !== "all" ? state.client : state.company !== "all" ? state.company : state.db === "all" ? "all databases" : state.db;
+    var portfolioView = state.company === "all" && state.client === "all";
     var moverFrom = isAllTime ? 15 : from;
     var moverTo = isAllTime ? 26 : to;
     var movers = companyMovers(scopeEntities, moverFrom, moverTo);
-    var offboardedRows = OFFBOARDED.filter(function (r) {
-      return (state.db === "all" || r.db === state.db) && (state.company === "all" || entityCompany(r) === state.company);
-    });
-    var fillRows = FILL_OUTLIERS.filter(function (r) {
-      return (state.db === "all" || r.db === state.db) && (state.company === "all" || r.company === state.company || entityCompany(r) === state.company);
-    });
+    var priorMoverFrom = moverFrom - 12;
+    var priorMoverTo = moverTo - 12;
+    var offboardedRows = priorMoverFrom < 0 ? [] : scopeEntities.map(function (r) {
+      var prior = sumRange(r.shipped, priorMoverFrom, priorMoverTo);
+      var current = sumRange(r.shipped, moverFrom, moverTo);
+      var lastActiveIndex = -1;
+      for (var i = 0; i <= moverTo; i++) if (r.shipped[i] > 0) lastActiveIndex = i;
+      return { db: r.db, company: r.company, client: r.client, lost: prior, current: current, lastActive: lastActiveIndex < 0 ? "-" : MONTHS[lastActiveIndex] };
+    }).filter(function (r) { return r.lost > 0 && r.current === 0; })
+      .sort(function (a, b) { return b.lost - a.lost; });
+    var fillRows = filtered.filter(function (r) { return r.created > 0 && (r.fill < 80 || r.fill > 120); });
 
     var dbPeriodMap = {};
     scopeEntities.forEach(function (row) {
@@ -358,6 +335,26 @@
       return { db: dbName, created: r.created, shipped: r.shipped, clientsPeak: clientsPeakDb };
     }).sort(function (a, b) { return b.shipped - a.shipped; });
 
+    var continuingEntities = scopeEntities.filter(function (r) { return sumRange(r.shipped, 15, 26) > 0; });
+    var continuingCreated = seriesSum(continuingEntities, "created");
+    var continuingShipped = seriesSum(continuingEntities, "shipped");
+    var continuingClients = seriesSum(continuingEntities, "clients");
+    var continuingCount = continuingEntities.length;
+    var continuingCurrentFrom = isAllTime ? 15 : from;
+    var continuingCurrentTo = isAllTime ? 26 : to;
+    var continuingPreviousFrom = continuingCurrentFrom - 12;
+    var continuingPreviousTo = continuingCurrentTo - 12;
+    var hasContinuingComparison = continuingPreviousFrom >= 0;
+    var continuingCurrentCreated = sumRange(continuingCreated, continuingCurrentFrom, continuingCurrentTo);
+    var continuingCurrentShipped = sumRange(continuingShipped, continuingCurrentFrom, continuingCurrentTo);
+    var continuingPreviousCreated = hasContinuingComparison ? sumRange(continuingCreated, continuingPreviousFrom, continuingPreviousTo) : 0;
+    var continuingPreviousShipped = hasContinuingComparison ? sumRange(continuingShipped, continuingPreviousFrom, continuingPreviousTo) : 0;
+    var continuingFill = continuingCurrentCreated ? (100 * continuingCurrentShipped) / continuingCurrentCreated : 0;
+
+    var concentration = filtered.filter(function (r) { return r.shipped > 0; }).map(function (r) {
+      return { company: r.company, shipped: r.shipped, share: shipped ? (100 * r.shipped) / shipped : 0 };
+    }).sort(function (a, b) { return b.shipped - a.shipped; }).slice(0, 8);
+
     var intro = document.createElement("p");
     intro.className = "lede";
     intro.textContent = "Order created vs shipped for 69 IDs across three servers and seven databases, Jun 2024 - Aug 2026. Test companies excluded. DeliverrLiveDB IDs are Flexport clients, so company-grain views count them once.";
@@ -374,17 +371,17 @@
 
     var call = document.createElement("div");
     call.className = "callout";
-    call.textContent = "Shipped volume fell " + fmtPct(ttmYoy) + " year over year. Flexport went from " +
-      FLEXPORT_TTM.prev.toLocaleString() + " shipped orders in the prior twelve months to " +
-      FLEXPORT_TTM.curr.toLocaleString() + ", as 12 of its 18 client accounts stopped producing orders. That is " +
-      flexportShareOfDrop.toFixed(0) + "% of the total decline. The remaining " + CONTINUING_COUNT +
-      " continuing accounts are down " + fmtPct(continuingYoy) + ".";
+    call.textContent = scopeLabel + " | " + selectedRange.label + ": " +
+      created.toLocaleString() + " orders created, " + shipped.toLocaleString() +
+      " shipped, " + fill.toFixed(1) + "% shipped/created, and " + clientsPeak +
+      " peak monthly clients.";
     root.appendChild(call);
 
     var filters = document.createElement("div");
     filters.className = "filters";
-    filters.appendChild(labeled("Database", sel("db", state.db, [{ value: "all", label: "All databases" }].concat(DB_TOTALS.map(function (r) { return { value: r.db, label: r.db }; })), function (v) { state.db = v; state.company = "all"; render(); })));
-    filters.appendChild(labeled("Company", sel("co", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; render(); })));
+    filters.appendChild(labeled("Database", sel("db", state.db, [{ value: "all", label: "All databases" }].concat(DB_TOTALS.map(function (r) { return { value: r.db, label: r.db }; })), function (v) { state.db = v; state.company = "all"; state.client = "all"; render(); })));
+    filters.appendChild(labeled("Company", sel("co", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; state.client = "all"; render(); })));
+    filters.appendChild(labeled("Client", sel("cl", state.client, [{ value: "all", label: "All clients" }].concat(clientOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.client = v; render(); })));
     filters.appendChild(labeled("Quarter", sel("q", state.month !== "none" ? "none" : state.quarter, [{ value: "none", label: "Not used" }, { value: "all", label: ALL_TIME.label }].concat(QUARTER_RANGES.map(function (r) { return { value: r.value, label: r.label }; })), function (v) {
       if (v === "none") { state.quarter = state.month !== "none" ? "none" : "all"; }
       else { state.quarter = v; state.month = "none"; }
@@ -415,11 +412,11 @@
 
     var cap = document.createElement("p");
     cap.className = "muted";
-    cap.textContent = "Filters: Database, Company, and either Quarter or Month. August 2026 is a complete month. " + scopeLabel + " | " + selectedRange.label;
+    cap.textContent = "Filters: Database, Company, Client, and either Quarter or Month. August 2026 is a complete month. " + scopeLabel + " | " + selectedRange.label;
     root.appendChild(cap);
 
     var h2 = document.createElement("h2");
-    h2.textContent = (portfolioView ? "All accounts" : state.company) + " - created vs shipped per month";
+    h2.textContent = (portfolioView ? "All accounts" : scopeLabel) + " - created vs shipped per month";
     root.appendChild(h2);
     var box1 = document.createElement("div");
     box1.className = "chart-box";
@@ -441,13 +438,13 @@
       { label: "Clients", data: chartClients, borderColor: "#9a6700", backgroundColor: "rgba(154,103,0,0.15)", tension: 0.2, fill: true },
     ]));
 
-    if (state.db === "all" && portfolioView) {
+    if (continuingCount) {
       var hCont = document.createElement("h2");
       hCont.textContent = "Continuing accounts only - created vs shipped per month";
       root.appendChild(hCont);
       var pCont = document.createElement("p");
       pCont.className = "muted";
-      pCont.textContent = selectedRange.label + " | " + CONTINUING_COUNT + " accounts still shipping in the latest twelve months.";
+      pCont.textContent = scopeLabel + " | " + selectedRange.label + " | " + continuingCount + " matching company/client rows still shipping in the latest twelve months.";
       root.appendChild(pCont);
       var box3 = document.createElement("div");
       box3.className = "chart-box";
@@ -456,22 +453,29 @@
       box3.appendChild(c3);
       root.appendChild(box3);
       addChart(c3, lineOrBar(monthLabels, [
-        { label: "Created (continuing)", data: CONT_CREATED.slice(from, to + 1), borderColor: "#0969da", tension: 0.2, fill: false },
-        { label: "Shipped (continuing)", data: CONT_SHIPPED.slice(from, to + 1), borderColor: "#1a7f37", tension: 0.2, fill: false },
+        { label: "Created (continuing)", data: continuingCreated.slice(from, to + 1), borderColor: "#0969da", tension: 0.2, fill: false },
+        { label: "Shipped (continuing)", data: continuingShipped.slice(from, to + 1), borderColor: "#1a7f37", tension: 0.2, fill: false },
+      ]));
+      var box3Clients = document.createElement("div");
+      box3Clients.className = "chart-box";
+      box3Clients.style.height = "160px";
+      var c3Clients = document.createElement("canvas");
+      box3Clients.appendChild(c3Clients);
+      root.appendChild(box3Clients);
+      addChart(c3Clients, lineOrBar(monthLabels, [
+        { label: "Clients (continuing)", data: continuingClients.slice(from, to + 1), borderColor: "#9a6700", backgroundColor: "rgba(154,103,0,0.15)", tension: 0.2, fill: true },
       ]));
       var contStats = document.createElement("div");
       contStats.className = "stats";
-      contStats.appendChild(stat(fmtPct(CONT_TTM_YOY_SHIPPED), "Shipped TTM YoY (continuing)", "bad"));
-      contStats.appendChild(stat(fmtPct(CONT_TTM_YOY_CREATED), "Created TTM YoY (continuing)", "ok"));
-      contStats.appendChild(stat(fmtPct(CONT_LAST_FULL_YOY_SHIPPED), "Shipped YoY, Aug 2026", "bad"));
-      contStats.appendChild(stat(CONT_TTM_CURR_FILL.toFixed(1) + "%", "Shipped / created, current TTM", "bad"));
+      if (hasContinuingComparison) {
+        var continuingShippedChange = pctChange(continuingCurrentShipped, continuingPreviousShipped);
+        var continuingCreatedChange = pctChange(continuingCurrentCreated, continuingPreviousCreated);
+        contStats.appendChild(stat(fmtPct(continuingShippedChange), "Shipped vs prior year (continuing)", continuingShippedChange < 0 ? "bad" : "ok"));
+        contStats.appendChild(stat(fmtPct(continuingCreatedChange), "Created vs prior year (continuing)", continuingCreatedChange < 0 ? "bad" : "ok"));
+      }
+      contStats.appendChild(stat(continuingFill.toFixed(1) + "%", "Shipped / created (continuing)"));
+      contStats.appendChild(stat(String(Math.max.apply(null, [0].concat(continuingClients.slice(from, to + 1)))), "Peak monthly clients (continuing)"));
       root.appendChild(contStats);
-      var contNote = document.createElement("p");
-      contNote.className = "muted";
-      contNote.textContent = "TTM = Sep 2025-Aug 2026 vs Sep 2024-Aug 2025. Created is up " + fmtPct(CONT_TTM_YOY_CREATED) +
-        " and shipped is down " + fmtPct(CONT_TTM_YOY_SHIPPED) + ". Fill fell from " + CONT_TTM_PREV_FILL.toFixed(1) +
-        "% to " + CONT_TTM_CURR_FILL.toFixed(1) + "%. Aug 2026 created is " + fmtPct(CONT_LAST_FULL_YOY_CREATED) + " YoY.";
-      root.appendChild(contNote);
     }
 
     var grid = document.createElement("div");
@@ -485,12 +489,20 @@
     var cA = document.createElement("canvas");
     boxA.appendChild(cA);
     cardA.appendChild(boxA);
+    var boxAClients = document.createElement("div");
+    boxAClients.className = "chart-box client-chart";
+    boxAClients.style.height = "260px";
+    var cAClients = document.createElement("canvas");
+    boxAClients.appendChild(cAClients);
+    cardA.appendChild(boxAClients);
     cardA.appendChild(table(["Company", "Shipped", "Created", "Peak clients"], top.map(function (r) {
       return [r.company, r.shipped.toLocaleString(), r.created.toLocaleString(), String(r.clientsPeak)];
     }), 1));
     addChart(cA, hBar(top.map(function (r) { return r.company; }), [
       { label: "OrderShippedCount", data: top.map(function (r) { return r.shipped; }), backgroundColor: "#1a7f37" },
       { label: "OrderCreatedCount", data: top.map(function (r) { return r.created; }), backgroundColor: "#0969da" },
+    ]));
+    addChart(cAClients, hBar(top.map(function (r) { return r.company; }), [
       { label: "Peak monthly clients", data: top.map(function (r) { return r.clientsPeak; }), backgroundColor: "#9a6700" },
     ]));
     var cardB = document.createElement("div");
@@ -502,12 +514,20 @@
     var cB = document.createElement("canvas");
     boxB.appendChild(cB);
     cardB.appendChild(boxB);
+    var boxBClients = document.createElement("div");
+    boxBClients.className = "chart-box client-chart";
+    boxBClients.style.height = "260px";
+    var cBClients = document.createElement("canvas");
+    boxBClients.appendChild(cBClients);
+    cardB.appendChild(boxBClients);
     cardB.appendChild(table(["Database", "Shipped", "Created", "Peak clients"], dbPeriod.map(function (r) {
       return [r.db, r.shipped.toLocaleString(), r.created.toLocaleString(), String(r.clientsPeak)];
     }), 1));
     addChart(cB, hBar(dbPeriod.map(function (r) { return r.db; }), [
       { label: "Created", data: dbPeriod.map(function (r) { return r.created; }), backgroundColor: "#0969da" },
       { label: "Shipped", data: dbPeriod.map(function (r) { return r.shipped; }), backgroundColor: "#1a7f37" },
+    ]));
+    addChart(cBClients, hBar(dbPeriod.map(function (r) { return r.db; }), [
       { label: "Peak monthly clients", data: dbPeriod.map(function (r) { return r.clientsPeak; }), backgroundColor: "#9a6700" },
     ]));
     grid.appendChild(cardA);
@@ -525,11 +545,11 @@
       boxO.appendChild(cO);
       root.appendChild(boxO);
       var topOff = offboardedRows.slice(0, 6);
-      addChart(cO, hBar(topOff.map(function (r) { return entityClient(r) || r.company; }), [
+      addChart(cO, hBar(topOff.map(function (r) { return r.client || r.company; }), [
         { label: "Prior-year shipped orders now at zero", data: topOff.map(function (r) { return r.lost; }), backgroundColor: "#cf222e" },
       ]));
       root.appendChild(table(["Database", "Company", "Client", "Last active month", "Prior-year shipped"], offboardedRows.map(function (r) {
-        return [r.db, entityCompany(r), entityClient(r) || "-", r.lastActive, r.lost.toLocaleString()];
+        return [r.db, r.company, r.client || "-", r.lastActive, r.lost.toLocaleString()];
       }), 4));
     }
 
@@ -562,7 +582,7 @@
     root.appendChild(hConc);
     var pConc = document.createElement("p");
     pConc.className = "muted";
-    pConc.textContent = "Share of the 5.22M current-TTM shipped orders. Pepsi is 29% of remaining volume.";
+    pConc.textContent = "Share of " + shipped.toLocaleString() + " shipped orders for " + scopeLabel + " | " + selectedRange.label + ".";
     root.appendChild(pConc);
     var boxC = document.createElement("div");
     boxC.className = "chart-box";
@@ -570,8 +590,8 @@
     var cC = document.createElement("canvas");
     boxC.appendChild(cC);
     root.appendChild(boxC);
-    addChart(cC, hBar(CONCENTRATION.map(function (r) { return r.company; }), [
-      { label: "Share of TTM shipped orders", data: CONCENTRATION.map(function (r) { return r.share; }), backgroundColor: "#0969da" },
+    addChart(cC, hBar(concentration.map(function (r) { return r.company; }), [
+      { label: "Share of selected shipped orders", data: concentration.map(function (r) { return Number(r.share.toFixed(1)); }), backgroundColor: "#0969da" },
     ], "%"));
 
     var hTot = document.createElement("h2");
@@ -600,14 +620,17 @@
     var selectedRange = resolvePeriod(state.quarter, state.month);
     var from = selectedRange.from, to = selectedRange.to;
     var monthLabels = MONTH_LABELS.slice(from, to + 1);
-    var inDatabase = state.dsDb === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.dsDb; });
+    var inDatabase = state.db === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.db; });
     var companyOptions = [];
     inDatabase.forEach(function (r) { if (companyOptions.indexOf(r.company) < 0) companyOptions.push(r.company); });
-    var inCompany = state.dsCompany === "all" ? inDatabase : inDatabase.filter(function (r) { return r.company === state.dsCompany; });
-    if (!inCompany.length) inCompany = inDatabase;
-    var clientOptions = inCompany.filter(function (r) { return r.client; }).map(function (r) { return r.client; });
-    var scopeRows = state.dsClient === "all" ? inCompany : inCompany.filter(function (r) { return r.client === state.dsClient; });
-    if (!scopeRows.length) scopeRows = inCompany;
+    companyOptions.sort();
+    if (state.company !== "all" && companyOptions.indexOf(state.company) < 0) state.company = "all";
+    var inCompany = state.company === "all" ? inDatabase : inDatabase.filter(function (r) { return r.company === state.company; });
+    var clientOptions = [];
+    inCompany.forEach(function (r) { if (r.client && clientOptions.indexOf(r.client) < 0) clientOptions.push(r.client); });
+    clientOptions.sort();
+    if (state.client !== "all" && clientOptions.indexOf(state.client) < 0) state.client = "all";
+    var scopeRows = state.client === "all" ? inCompany : inCompany.filter(function (r) { return r.client === state.client; });
     var scopeCreated = seriesSum(scopeRows, "created");
     var scopeShipped = seriesSum(scopeRows, "shipped");
     var scopeClients = seriesSum(scopeRows, "clients");
@@ -620,9 +643,9 @@
 
     var filters = document.createElement("div");
     filters.className = "filters";
-    filters.appendChild(labeled("Database", sel("dsdb", state.dsDb, [{ value: "all", label: "All databases" }].concat(DATABASES.map(function (d) { return { value: d, label: d }; })), function (v) { state.dsDb = v; state.dsCompany = "all"; state.dsClient = "all"; render(); })));
-    filters.appendChild(labeled("Company", sel("dsco", state.dsCompany, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.dsCompany = v; state.dsClient = "all"; render(); })));
-    filters.appendChild(labeled("Client", sel("dscl", state.dsClient, [{ value: "all", label: "All clients" }].concat(clientOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.dsClient = v; render(); })));
+    filters.appendChild(labeled("Database", sel("dsdb", state.db, [{ value: "all", label: "All databases" }].concat(DATABASES.map(function (d) { return { value: d, label: d }; })), function (v) { state.db = v; state.company = "all"; state.client = "all"; render(); })));
+    filters.appendChild(labeled("Company", sel("dsco", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; state.client = "all"; render(); })));
+    filters.appendChild(labeled("Client", sel("dscl", state.client, [{ value: "all", label: "All clients" }].concat(clientOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.client = v; render(); })));
     filters.appendChild(labeled("Quarter", sel("dsq", state.month !== "none" ? "none" : state.quarter, [{ value: "none", label: "Not used" }, { value: "all", label: ALL_TIME.label }].concat(QUARTER_RANGES.map(function (r) { return { value: r.value, label: r.label }; })), function (v) {
       if (v === "none") state.quarter = state.month !== "none" ? "none" : "all";
       else { state.quarter = v; state.month = "none"; }
@@ -672,7 +695,7 @@
     addChart(cvL, lineOrBar(monthLabels, [{ label: "Client", data: slice(scopeClients), borderColor: "#9a6700", tension: 0.2, fill: true, backgroundColor: "rgba(154,103,0,0.15)" }]));
 
     var hAll = document.createElement("h2");
-    hAll.textContent = "All accounts (ignores filters above)";
+    hAll.textContent = "All matching accounts";
     root.appendChild(hAll);
     var boxA = document.createElement("div");
     boxA.className = "chart-box";
@@ -685,12 +708,52 @@
       data: {
         labels: monthLabels,
         datasets: [
-          { label: "OrderShippedCount", data: slice(ALL_SHIPPED), backgroundColor: "#0969da" },
-          { label: "OrderCreatedCount", data: slice(ALL_CREATED), backgroundColor: "#1a7f37" },
+          { label: "OrderShippedCount", data: slice(scopeShipped), backgroundColor: "#0969da" },
+          { label: "OrderCreatedCount", data: slice(scopeCreated), backgroundColor: "#1a7f37" },
         ],
       },
       options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } }, scales: { y: { beginAtZero: true } } },
     });
+    var boxAClients = document.createElement("div");
+    boxAClients.className = "chart-box";
+    boxAClients.style.height = "160px";
+    var cvAClients = document.createElement("canvas");
+    boxAClients.appendChild(cvAClients);
+    root.appendChild(boxAClients);
+    addChart(cvAClients, lineOrBar(monthLabels, [
+      { label: "Client count", data: slice(scopeClients), borderColor: "#9a6700", backgroundColor: "rgba(154,103,0,0.15)", tension: 0.2, fill: true },
+    ]));
+
+    var rawRows = [];
+    for (var monthIndex = to; monthIndex >= from; monthIndex--) {
+      scopeRows.forEach(function (r) {
+        var createdValue = r.created[monthIndex];
+        var shippedValue = r.shipped[monthIndex];
+        var clientValue = r.clients[monthIndex];
+        if (createdValue || shippedValue || clientValue) {
+          rawRows.push([
+            MONTH_LABELS[monthIndex],
+            r.db,
+            r.company,
+            r.client || "-",
+            createdValue.toLocaleString(),
+            shippedValue.toLocaleString(),
+            clientValue.toLocaleString(),
+          ]);
+        }
+      });
+    }
+    var hRaw = document.createElement("h2");
+    hRaw.textContent = "Raw monthly data";
+    root.appendChild(hRaw);
+    var rawNote = document.createElement("p");
+    rawNote.className = "muted";
+    rawNote.textContent = rawRows.length.toLocaleString() + " rows matching all active filters. Newest month first.";
+    root.appendChild(rawNote);
+    var rawWrap = document.createElement("div");
+    rawWrap.className = "scroll raw-data";
+    rawWrap.appendChild(table(["Month", "Database", "Company", "Client", "Created", "Shipped", "Clients"], rawRows, 4));
+    root.appendChild(rawWrap);
   }
 
   function render() {

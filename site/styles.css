@@ -64,6 +64,20 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .scroll { overflow-x: auto; }
+.raw-data {
+  max-height: 520px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.raw-data th {
+  position: sticky;
+  top: 0;
+  background: var(--card);
+  z-index: 1;
+}
+.client-chart { background: #fffbeb; }
 .banner {
   background: #fff8c5;
   border-bottom: 1px solid #d4a72c;
