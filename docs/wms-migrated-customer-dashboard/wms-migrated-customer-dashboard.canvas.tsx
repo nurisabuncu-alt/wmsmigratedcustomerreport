@@ -764,10 +764,15 @@ function DataStudioTab() {
           <Select
             value={effectiveClient}
             onChange={setClient}
-            options={[
-              { value: "all", label: "All clients" },
-              ...clientOptions.map((c) => ({ value: c, label: c })),
-            ]}
+            disabled={clientOptions.length === 0}
+            options={
+              clientOptions.length === 0
+                ? [{ value: "all", label: "No client names in this snapshot" }]
+                : [
+                    { value: "all", label: "All clients" },
+                    ...clientOptions.map((c) => ({ value: c, label: c })),
+                  ]
+            }
           />
         </Row>
         <PeriodFilters
@@ -1241,10 +1246,15 @@ function DashboardTab() {
           <Select
             value={effectiveClient}
             onChange={setClient}
-            options={[
-              { value: "all", label: "All clients" },
-              ...clientOptions.map((c) => ({ value: c, label: c })),
-            ]}
+            disabled={clientOptions.length === 0}
+            options={
+              clientOptions.length === 0
+                ? [{ value: "all", label: "No client names in this snapshot" }]
+                : [
+                    { value: "all", label: "All clients" },
+                    ...clientOptions.map((c) => ({ value: c, label: c })),
+                  ]
+            }
           />
         </Row>
         <PeriodFilters
@@ -1301,7 +1311,9 @@ function DashboardTab() {
         Totals, charts, and change percentages follow Database, Company, Client,
         and either Quarter or Month - never both at once. Choosing a month sets
         Quarter to Not used, and choosing a quarter sets Month to Not used. YoY
-        is the same period a year earlier. August 2026 is a complete month |{" "}
+        is the same period a year earlier. Client names were extracted only for
+        Flexport on DeliverrLiveDB; the other databases report client counts but
+        not names. August 2026 is a complete month |{" "}
         {scopeLabel} | {selectedRange.label}
       </Text>
 

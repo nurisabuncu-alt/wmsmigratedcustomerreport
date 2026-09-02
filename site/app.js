@@ -219,6 +219,18 @@
     wrap.appendChild(el);
     return wrap;
   }
+  // Client names exist only where the extraction ran at depositor grain
+  // (DeliverrLiveDB / Flexport). Elsewhere we know the client count but no names.
+  function clientSelect(id, clientOptions) {
+    if (!clientOptions.length) {
+      var empty = sel(id, "all", [{ value: "all", label: "No client names in this snapshot" }], function () {});
+      empty.disabled = true;
+      return empty;
+    }
+    return sel(id, state.client, [{ value: "all", label: "All clients" }].concat(clientOptions.map(function (c) {
+      return { value: c, label: c };
+    })), function (v) { state.client = v; render(); });
+  }
   function stat(value, label, tone) {
     var d = document.createElement("div");
     d.className = "stat" + (tone === "bad" ? " bad" : tone === "ok" ? " ok" : "");
@@ -390,7 +402,7 @@
     filters.className = "filters";
     filters.appendChild(labeled("Database", sel("db", state.db, [{ value: "all", label: "All databases" }].concat(DB_TOTALS.map(function (r) { return { value: r.db, label: r.db }; })), function (v) { state.db = v; state.company = "all"; state.client = "all"; render(); })));
     filters.appendChild(labeled("Company", sel("co", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; state.client = "all"; render(); })));
-    filters.appendChild(labeled("Client", sel("cl", state.client, [{ value: "all", label: "All clients" }].concat(clientOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.client = v; render(); })));
+    filters.appendChild(labeled("Client", clientSelect("cl", clientOptions)));
     filters.appendChild(labeled("Quarter", sel("q", state.month !== "none" ? "none" : state.quarter, [{ value: "none", label: "Not used" }, { value: "all", label: ALL_TIME.label }].concat(QUARTER_RANGES.map(function (r) { return { value: r.value, label: r.label }; })), function (v) {
       if (v === "none") { state.quarter = state.month !== "none" ? "none" : "all"; }
       else { state.quarter = v; state.month = "none"; }
@@ -421,7 +433,7 @@
 
     var cap = document.createElement("p");
     cap.className = "muted";
-    cap.textContent = "Filters: Database, Company, Client, and either Quarter or Month. August 2026 is a complete month. " + scopeLabel + " | " + selectedRange.label;
+    cap.textContent = "Filters: Database, Company, Client, and either Quarter or Month. August 2026 is a complete month. Client names were extracted only for Flexport on DeliverrLiveDB; the other databases report client counts but not names. " + scopeLabel + " | " + selectedRange.label;
     root.appendChild(cap);
 
     var h2 = document.createElement("h2");
@@ -656,7 +668,7 @@
     filters.className = "filters";
     filters.appendChild(labeled("Database", sel("dsdb", state.db, [{ value: "all", label: "All databases" }].concat(DATABASES.map(function (d) { return { value: d, label: d }; })), function (v) { state.db = v; state.company = "all"; state.client = "all"; render(); })));
     filters.appendChild(labeled("Company", sel("dsco", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; state.client = "all"; render(); })));
-    filters.appendChild(labeled("Client", sel("dscl", state.client, [{ value: "all", label: "All clients" }].concat(clientOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.client = v; render(); })));
+    filters.appendChild(labeled("Client", clientSelect("dscl", clientOptions)));
     filters.appendChild(labeled("Quarter", sel("dsq", state.month !== "none" ? "none" : state.quarter, [{ value: "none", label: "Not used" }, { value: "all", label: ALL_TIME.label }].concat(QUARTER_RANGES.map(function (r) { return { value: r.value, label: r.label }; })), function (v) {
       if (v === "none") state.quarter = state.month !== "none" ? "none" : "all";
       else { state.quarter = v; state.month = "none"; }
