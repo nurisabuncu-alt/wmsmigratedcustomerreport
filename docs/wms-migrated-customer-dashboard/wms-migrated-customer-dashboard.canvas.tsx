@@ -1167,19 +1167,35 @@ function DashboardTab() {
           ? "all databases"
           : db;
 
+  const activeRows = useMemo(
+    () =>
+      scopeEntities.filter(
+        (r) => sumRange(r.created, from, to) > 0 || sumRange(r.shipped, from, to) > 0,
+      ),
+    [scopeEntities, from, to],
+  );
+
   return (
     <Stack gap={24}>
       <Stack gap={8}>
         <Text tone="secondary">
-          Order created vs shipped for all 69 IDs you supplied across three servers
-          and seven databases, Jun 2024 - Aug 2026. Test companies excluded. The 27
-          DeliverrLiveDB IDs are clients of one company, Flexport, so company-grain
-          views below count them once.
+          Order created vs shipped across three servers and seven databases,
+          Jun 2024 - Aug 2026. Test companies excluded. DeliverrLiveDB IDs are
+          clients of one company, Flexport, so company-grain views below count
+          them once. Every figure below follows the filters.
         </Text>
         <Row gap={8} wrap>
-          <Pill>69 IDs mapped</Pill>
-          <Pill>40 companies with volume</Pill>
-          <Pill>57 company/client accounts</Pill>
+          <Pill>{dbPeriod.length === 1 ? "1 database" : `${dbPeriod.length} databases`}</Pill>
+          <Pill>
+            {filtered.length === 1
+              ? "1 company with volume"
+              : `${filtered.length} companies with volume`}
+          </Pill>
+          <Pill>
+            {activeRows.length === 1
+              ? "1 company/client account"
+              : `${activeRows.length} company/client accounts`}
+          </Pill>
           <Pill>Snapshot, not live</Pill>
         </Row>
       </Stack>
@@ -1321,8 +1337,9 @@ function DashboardTab() {
       <Stack gap={8}>
         <H2>Continuing accounts only - created vs shipped per month</H2>
         <Text tone="tertiary">
-          Source: MSSQL | {selectedRange.label} | {scopeLabel} | {continuingCount} matching
-          company/client rows still shipping in the latest twelve months | orders
+          Source: MSSQL | {selectedRange.label} | {scopeLabel} | {continuingCount}{" "}
+          {continuingCount === 1 ? "matching company/client row" : "matching company/client rows"}{" "}
+          still shipping in the latest twelve months | orders
         </Text>
         <TrendChart
           height={260}

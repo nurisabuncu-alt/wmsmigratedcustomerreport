@@ -355,13 +355,22 @@
       return { company: r.company, shipped: r.shipped, share: shipped ? (100 * r.shipped) / shipped : 0 };
     }).sort(function (a, b) { return b.shipped - a.shipped; }).slice(0, 8);
 
+    var activeRows = scopeEntities.filter(function (r) {
+      return sumRange(r.created, from, to) > 0 || sumRange(r.shipped, from, to) > 0;
+    });
+
     var intro = document.createElement("p");
     intro.className = "lede";
-    intro.textContent = "Order created vs shipped for 69 IDs across three servers and seven databases, Jun 2024 - Aug 2026. Test companies excluded. DeliverrLiveDB IDs are Flexport clients, so company-grain views count them once.";
+    intro.textContent = "Order created vs shipped across three servers and seven databases, Jun 2024 - Aug 2026. Test companies excluded. DeliverrLiveDB IDs are Flexport clients, so company-grain views count them once. Every figure below follows the filters.";
     root.appendChild(intro);
     var pills = document.createElement("div");
     pills.className = "pills";
-    ["69 IDs mapped", "40 companies with volume", "57 company/client accounts", "Snapshot, not live"].forEach(function (t) {
+    [
+      dbPeriod.length + (dbPeriod.length === 1 ? " database" : " databases"),
+      filtered.length + (filtered.length === 1 ? " company with volume" : " companies with volume"),
+      activeRows.length + (activeRows.length === 1 ? " company/client account" : " company/client accounts"),
+      "Snapshot, not live",
+    ].forEach(function (t) {
       var p = document.createElement("span");
       p.className = "pill";
       p.textContent = t;
@@ -444,7 +453,9 @@
       root.appendChild(hCont);
       var pCont = document.createElement("p");
       pCont.className = "muted";
-      pCont.textContent = scopeLabel + " | " + selectedRange.label + " | " + continuingCount + " matching company/client rows still shipping in the latest twelve months.";
+      pCont.textContent = scopeLabel + " | " + selectedRange.label + " | " + continuingCount +
+        (continuingCount === 1 ? " matching company/client row" : " matching company/client rows") +
+        " still shipping in the latest twelve months.";
       root.appendChild(pCont);
       var box3 = document.createElement("div");
       box3.className = "chart-box";
