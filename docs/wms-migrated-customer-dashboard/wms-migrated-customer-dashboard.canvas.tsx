@@ -661,11 +661,11 @@ function companyMovers(
 // ---------------------------------------------------------------------------
 
 function DataStudioTab() {
-  const [dbFilter, setDbFilter] = useCanvasState("ds-db", "all");
-  const [company, setCompany] = useCanvasState("ds-company", "all");
-  const [client, setClient] = useCanvasState("ds-client", "all");
-  const [quarter, setQuarter] = useCanvasState("ds-quarter", "all");
-  const [month, setMonth] = useCanvasState("ds-month", "none");
+  const [dbFilter, setDbFilter] = useCanvasState("db", "all");
+  const [company, setCompany] = useCanvasState("company", "all");
+  const [client, setClient] = useCanvasState("client", "all");
+  const [quarter, setQuarter] = useCanvasState("quarter", "all");
+  const [month, setMonth] = useCanvasState("month", "none");
 
   const selectedRange = resolvePeriod(quarter, month);
   const { from, to } = selectedRange;
@@ -676,28 +676,33 @@ function DataStudioTab() {
     [dbFilter],
   );
 
-  // Company options follow the database selection, and Client options follow the
-  // company, as the linked filters do in Looker Studio. A stale selection falls
-  // back to the wider scope instead of emptying the report.
   const companyOptions = useMemo(
-    () => [...new Set(inDatabase.map((r) => r.company))],
+    () => [...new Set(inDatabase.map((r) => r.company))].sort(),
     [inDatabase],
   );
 
-  const inCompany = useMemo(() => {
-    const match = inDatabase.filter((r) => r.company === company);
-    return company === "all" || match.length === 0 ? inDatabase : match;
-  }, [inDatabase, company]);
+  const effectiveCompany = company !== "all" && companyOptions.includes(company) ? company : "all";
+  const inCompany = useMemo(
+    () =>
+      effectiveCompany === "all"
+        ? inDatabase
+        : inDatabase.filter((r) => r.company === effectiveCompany),
+    [inDatabase, effectiveCompany],
+  );
 
   const clientOptions = useMemo(
-    () => inCompany.filter((r) => r.client).map((r) => r.client),
+    () => [...new Set(inCompany.filter((r) => r.client).map((r) => r.client))].sort(),
     [inCompany],
   );
 
-  const scopeRows = useMemo(() => {
-    const match = inCompany.filter((r) => r.client === client);
-    return client === "all" || match.length === 0 ? inCompany : match;
-  }, [inCompany, client]);
+  const effectiveClient = client !== "all" && clientOptions.includes(client) ? client : "all";
+  const scopeRows = useMemo(
+    () =>
+      effectiveClient === "all"
+        ? inCompany
+        : inCompany.filter((r) => r.client === effectiveClient),
+    [inCompany, effectiveClient],
+  );
 
   const scopeCreated = useMemo(() => seriesSum(scopeRows, "created"), [scopeRows]);
   const scopeShipped = useMemo(() => seriesSum(scopeRows, "shipped"), [scopeRows]);
@@ -729,7 +734,11 @@ function DataStudioTab() {
           <Text weight="semibold">Database</Text>
           <Select
             value={dbFilter}
-            onChange={setDbFilter}
+            onChange={(value) => {
+              setDbFilter(value);
+              setCompany("all");
+              setClient("all");
+            }}
             options={[
               { value: "all", label: "All databases" },
               ...DATABASES.map((d) => ({ value: d, label: d })),
@@ -739,8 +748,11 @@ function DataStudioTab() {
         <Row gap={8} align="center">
           <Text weight="semibold">Company</Text>
           <Select
-            value={company}
-            onChange={setCompany}
+            value={effectiveCompany}
+            onChange={(value) => {
+              setCompany(value);
+              setClient("all");
+            }}
             options={[
               { value: "all", label: "All companies" },
               ...companyOptions.map((c) => ({ value: c, label: c })),
@@ -750,7 +762,7 @@ function DataStudioTab() {
         <Row gap={8} align="center">
           <Text weight="semibold">Client</Text>
           <Select
-            value={client}
+            value={effectiveClient}
             onChange={setClient}
             options={[
               { value: "all", label: "All clients" },
@@ -829,23 +841,62 @@ function DataStudioTab() {
       <Divider />
 
       <Stack gap={8}>
-        <H2>All Accounts Order Shipped VS Created Count per Company per Month</H2>
+        <H2>All matching accounts - shipped vs created</H2>
         <Text tone="tertiary">
-          Source: MSSQL, all seven databases | {selectedRange.label} | all 57
-          companies with volume, ignoring the filters above | counts in orders
+          Source: MSSQL | {selectedRange.label} | {scopeLabel} | counts in orders.
+          This chart follows the same filters as the dashlets above.
         </Text>
         <BarChart
           height={300}
           categories={monthLabels}
           series={[
-            { name: "OrderShippedCount", data: slice(ALL_SHIPPED), tone: "info" },
-            { name: "OrderCreatedCount", data: slice(ALL_CREATED), tone: "success" },
+            { name: "OrderShippedCount", data: slice(scopeShipped), tone: "info" },
+            { name: "OrderCreatedCount", data: slice(scopeCreated), tone: "success" },
           ]}
         />
         <TrendChart
-          height={150}
+          height={160}
           categories={monthLabels}
-          series={[{ name: "Client", data: slice(ALL_CLIENTS), tone: "warning" }]}
+          series={[{ name: "Client count", data: slice(scopeClients), tone: "warning" }]}
+        />
+        <Text tone="tertiary">
+          Distinct client count for the same selection, on its own scale.
+        </Text>
+      </Stack>
+
+      <Stack gap={8}>
+        <H2>Raw monthly data</H2>
+        <Text tone="tertiary">
+          Source: MSSQL | {selectedRange.label} | {scopeLabel} | newest month first.
+          One row per company/client with created, shipped, or client activity.
+        </Text>
+        <Table
+          striped
+          stickyHeader
+          headers={["Month", "Database", "Company", "Client", "Created", "Shipped", "Clients"]}
+          columnAlign={["left", "left", "left", "left", "right", "right", "right"]}
+          rows={(() => {
+            const rows: string[][] = [];
+            for (let monthIndex = to; monthIndex >= from; monthIndex -= 1) {
+              for (const r of scopeRows) {
+                const createdValue = r.created[monthIndex];
+                const shippedValue = r.shipped[monthIndex];
+                const clientValue = r.clients[monthIndex];
+                if (createdValue || shippedValue || clientValue) {
+                  rows.push([
+                    MONTH_LABELS[monthIndex],
+                    r.db,
+                    r.company,
+                    r.client || "-",
+                    createdValue.toLocaleString(),
+                    shippedValue.toLocaleString(),
+                    clientValue.toLocaleString(),
+                  ]);
+                }
+              }
+            }
+            return rows;
+          })()}
         />
       </Stack>
 
@@ -882,32 +933,47 @@ const CONT_LAST_FULL_YOY_CREATED = pctChange(CONT_CREATED[26], CONT_CREATED[14])
 
 function DashboardTab() {
   const [db, setDb] = useCanvasState("db", "all");
-  const [company, setCompany] = useCanvasState("dash-company", "all");
-  const [quarter, setQuarter] = useCanvasState("dash-quarter", "all");
-  const [month, setMonth] = useCanvasState("dash-month", "none");
+  const [company, setCompany] = useCanvasState("company", "all");
+  const [client, setClient] = useCanvasState("client", "all");
+  const [quarter, setQuarter] = useCanvasState("quarter", "all");
+  const [month, setMonth] = useCanvasState("month", "none");
 
   const selectedRange = resolvePeriod(quarter, month);
   const { from, to } = selectedRange;
   const monthLabels = MONTH_LABELS.slice(from, to + 1);
 
   const inDatabase = useMemo(
-    () => (db === "all" ? COMPANY_TOTALS : COMPANY_TOTALS.filter((r) => r.db === db)),
+    () => (db === "all" ? ENTITIES : ENTITIES.filter((r) => r.db === db)),
     [db],
   );
 
   const companyOptions = useMemo(
-    () => inDatabase.map((r) => r.company),
+    () => [...new Set(inDatabase.map((r) => r.company))].sort(),
     [inDatabase],
   );
+  const effectiveCompany = company !== "all" && companyOptions.includes(company) ? company : "all";
 
-  const scopeEntities = useMemo(() => {
-    let rows = ENTITIES;
-    if (db !== "all") rows = rows.filter((r) => r.db === db);
-    if (company !== "all" && inDatabase.some((r) => r.company === company)) {
-      rows = rows.filter((r) => r.company === company);
-    }
-    return rows;
-  }, [db, company, inDatabase]);
+  const inCompany = useMemo(
+    () =>
+      effectiveCompany === "all"
+        ? inDatabase
+        : inDatabase.filter((r) => r.company === effectiveCompany),
+    [inDatabase, effectiveCompany],
+  );
+
+  const clientOptions = useMemo(
+    () => [...new Set(inCompany.filter((r) => r.client).map((r) => r.client))].sort(),
+    [inCompany],
+  );
+  const effectiveClient = client !== "all" && clientOptions.includes(client) ? client : "all";
+
+  const scopeEntities = useMemo(
+    () =>
+      effectiveClient === "all"
+        ? inCompany
+        : inCompany.filter((r) => r.client === effectiveClient),
+    [inCompany, effectiveClient],
+  );
 
   const filtered = useMemo(
     () => periodTotals(scopeEntities, from, to),
@@ -953,7 +1019,7 @@ function DashboardTab() {
   const chartShipped = scopeShipped.slice(from, to + 1);
   const chartClients = scopeClients.slice(from, to + 1);
   const clientsPeak = chartClients.length === 0 ? 0 : Math.max(0, ...chartClients);
-  const portfolioView = company === "all";
+  const portfolioView = effectiveCompany === "all" && effectiveClient === "all";
 
   const created = filtered.reduce((s, r) => s + r.created, 0);
   const shipped = filtered.reduce((s, r) => s + r.shipped, 0);
@@ -1004,16 +1070,6 @@ function DashboardTab() {
       ? pctChange(peakIn(scopeClients, from, to), peakIn(scopeClients, from - 12, to - 12))
       : 0;
 
-  const offboardedRows = useMemo(
-    () =>
-      OFFBOARDED.filter(
-        (r) =>
-          (db === "all" || r.db === db) &&
-          (company === "all" || entityCompany(r) === company),
-      ),
-    [db, company],
-  );
-
   const moverFrom = isAllTime ? 15 : from;
   const moverTo = isAllTime ? 26 : to;
   const { decliners: declinerRows, growers: growerRows } = useMemo(
@@ -1026,29 +1082,90 @@ function DashboardTab() {
       ? "Same month last year"
       : "Same quarter last year";
   const moverCurrLabel = isAllTime ? "Current TTM" : isMonth ? "This month" : "This quarter";
+  const priorMoverFrom = moverFrom - 12;
+  const priorMoverTo = moverTo - 12;
+
+  const offboardedRows = useMemo(() => {
+    if (priorMoverFrom < 0) return [];
+    return scopeEntities
+      .map((r) => {
+        const prior = sumRange(r.shipped, priorMoverFrom, priorMoverTo);
+        const current = sumRange(r.shipped, moverFrom, moverTo);
+        let lastActiveIndex = -1;
+        for (let i = 0; i <= moverTo; i += 1) if (r.shipped[i] > 0) lastActiveIndex = i;
+        return {
+          db: r.db,
+          company: r.company,
+          client: r.client,
+          lost: prior,
+          current,
+          lastActive: lastActiveIndex < 0 ? "-" : MONTHS[lastActiveIndex],
+        };
+      })
+      .filter((r) => r.lost > 0 && r.current === 0)
+      .sort((a, b) => b.lost - a.lost);
+  }, [scopeEntities, priorMoverFrom, priorMoverTo, moverFrom, moverTo]);
 
   const fillRows = useMemo(
-    () =>
-      FILL_OUTLIERS.filter(
-        (r) =>
-          (db === "all" || r.db === db) &&
-          (company === "all" || r.company === company || entityCompany(r) === company),
-      ),
-    [db, company],
+    () => filtered.filter((r) => r.created > 0 && (r.fill < 80 || r.fill > 120)),
+    [filtered],
   );
 
-  const ttmYoy = pctChange(TTM_CURR_SHIPPED, TTM_PREV_SHIPPED);
-  const continuingYoy = pctChange(CONTINUING_CURR, CONTINUING_PREV);
-  const flexportShareOfDrop =
-    (100 * (FLEXPORT_TTM.prev - FLEXPORT_TTM.curr)) /
-    (TTM_PREV_SHIPPED - TTM_CURR_SHIPPED);
+  const continuingEntities = useMemo(
+    () => scopeEntities.filter((r) => sumRange(r.shipped, 15, 26) > 0),
+    [scopeEntities],
+  );
+  const continuingCreated = useMemo(
+    () => seriesSum(continuingEntities, "created"),
+    [continuingEntities],
+  );
+  const continuingShipped = useMemo(
+    () => seriesSum(continuingEntities, "shipped"),
+    [continuingEntities],
+  );
+  const continuingClients = useMemo(
+    () => seriesSum(continuingEntities, "clients"),
+    [continuingEntities],
+  );
+  const continuingCount = continuingEntities.length;
+  const continuingCurrentFrom = isAllTime ? 15 : from;
+  const continuingCurrentTo = isAllTime ? 26 : to;
+  const continuingPreviousFrom = continuingCurrentFrom - 12;
+  const continuingPreviousTo = continuingCurrentTo - 12;
+  const hasContinuingComparison = continuingPreviousFrom >= 0;
+  const continuingCurrentCreated = sumRange(continuingCreated, continuingCurrentFrom, continuingCurrentTo);
+  const continuingCurrentShipped = sumRange(continuingShipped, continuingCurrentFrom, continuingCurrentTo);
+  const continuingPreviousCreated = hasContinuingComparison
+    ? sumRange(continuingCreated, continuingPreviousFrom, continuingPreviousTo)
+    : 0;
+  const continuingPreviousShipped = hasContinuingComparison
+    ? sumRange(continuingShipped, continuingPreviousFrom, continuingPreviousTo)
+    : 0;
+  const continuingFill = continuingCurrentCreated
+    ? (100 * continuingCurrentShipped) / continuingCurrentCreated
+    : 0;
+  const continuingShippedChange = pctChange(continuingCurrentShipped, continuingPreviousShipped);
+  const continuingCreatedChange = pctChange(continuingCurrentCreated, continuingPreviousCreated);
+  const continuingClientPeak = Math.max(0, ...continuingClients.slice(from, to + 1), 0);
+
+  const concentration = filtered
+    .filter((r) => r.shipped > 0)
+    .map((r) => ({
+      company: r.company,
+      shipped: r.shipped,
+      share: shipped ? (100 * r.shipped) / shipped : 0,
+    }))
+    .sort((a, b) => b.shipped - a.shipped)
+    .slice(0, 8);
 
   const scopeLabel =
-    company !== "all" && filtered.length === 1
-      ? company
-      : db === "all"
-        ? "all databases"
-        : db;
+    effectiveClient !== "all"
+      ? effectiveClient
+      : effectiveCompany !== "all"
+        ? effectiveCompany
+        : db === "all"
+          ? "all databases"
+          : db;
 
   return (
     <Stack gap={24}>
@@ -1068,13 +1185,9 @@ function DashboardTab() {
       </Stack>
 
       <Callout tone="warning">
-        Shipped volume fell {fmtPct(ttmYoy)} year over year, and one company
-        explains almost all of it: Flexport went from{" "}
-        {FLEXPORT_TTM.prev.toLocaleString()} shipped orders in the prior twelve
-        months to {FLEXPORT_TTM.curr.toLocaleString()}, as 12 of its 18 client
-        accounts stopped producing orders. That is {flexportShareOfDrop.toFixed(0)}%
-        of the total decline. Excluding accounts that shipped nothing in the latest twelve months, the
-        remaining {CONTINUING_COUNT} are down {fmtPct(continuingYoy)}.
+        {scopeLabel} | {selectedRange.label}: {created.toLocaleString()} orders
+        created, {shipped.toLocaleString()} shipped, {fill.toFixed(1)}%
+        shipped/created, and {clientsPeak} peak monthly clients.
       </Callout>
 
       <Row gap={16} align="center" wrap>
@@ -1082,7 +1195,11 @@ function DashboardTab() {
           <Text weight="semibold">Database</Text>
           <Select
             value={db}
-            onChange={setDb}
+            onChange={(value) => {
+              setDb(value);
+              setCompany("all");
+              setClient("all");
+            }}
             options={[
               { value: "all", label: "All databases" },
               ...DB_TOTALS.map((r) => ({ value: r.db, label: r.db })),
@@ -1092,11 +1209,25 @@ function DashboardTab() {
         <Row gap={8} align="center">
           <Text weight="semibold">Company</Text>
           <Select
-            value={company}
-            onChange={setCompany}
+            value={effectiveCompany}
+            onChange={(value) => {
+              setCompany(value);
+              setClient("all");
+            }}
             options={[
               { value: "all", label: "All companies" },
               ...companyOptions.map((c) => ({ value: c, label: c })),
+            ]}
+          />
+        </Row>
+        <Row gap={8} align="center">
+          <Text weight="semibold">Client</Text>
+          <Select
+            value={effectiveClient}
+            onChange={setClient}
+            options={[
+              { value: "all", label: "All clients" },
+              ...clientOptions.map((c) => ({ value: c, label: c })),
             ]}
           />
         </Row>
@@ -1151,16 +1282,16 @@ function DashboardTab() {
       </Grid>
 
       <Text tone="tertiary">
-        Totals, charts, and change percentages follow Database, Company, and either
-        Quarter or Month - never both at once. Choosing a month sets Quarter to
-        Not used, and choosing a quarter sets Month to Not used. YoY is the same
-        period a year earlier. August 2026 is a complete month | {scopeLabel} |{" "}
-        {selectedRange.label}
+        Totals, charts, and change percentages follow Database, Company, Client,
+        and either Quarter or Month - never both at once. Choosing a month sets
+        Quarter to Not used, and choosing a quarter sets Month to Not used. YoY
+        is the same period a year earlier. August 2026 is a complete month |{" "}
+        {scopeLabel} | {selectedRange.label}
       </Text>
 
       <Stack gap={8}>
         <H2>
-          {portfolioView ? "All accounts" : company} - created vs shipped per month
+          {portfolioView ? "All accounts" : scopeLabel} - created vs shipped per month
         </H2>
         <Text tone="tertiary">
           Source: MSSQL | {selectedRange.label} | {scopeLabel} | orders
@@ -1185,67 +1316,54 @@ function DashboardTab() {
         </Text>
       </Stack>
 
-      {db === "all" && portfolioView ? (
+      {continuingCount > 0 ? (
         <>
       <Stack gap={8}>
         <H2>Continuing accounts only - created vs shipped per month</H2>
         <Text tone="tertiary">
-          Source: MSSQL | {selectedRange.label} | {CONTINUING_COUNT} accounts still
-          shipping in the latest twelve months | orders. With the offboarded
-          Flexport clients removed, demand is roughly flat at 500-650K created per
-          month.
+          Source: MSSQL | {selectedRange.label} | {scopeLabel} | {continuingCount} matching
+          company/client rows still shipping in the latest twelve months | orders
         </Text>
         <TrendChart
           height={260}
           categories={monthLabels}
           series={[
-            { name: "Created (continuing)", data: CONT_CREATED.slice(from, to + 1), tone: "info" },
-            { name: "Shipped (continuing)", data: CONT_SHIPPED.slice(from, to + 1), tone: "success" },
+            { name: "Created (continuing)", data: continuingCreated.slice(from, to + 1), tone: "info" },
+            { name: "Shipped (continuing)", data: continuingShipped.slice(from, to + 1), tone: "success" },
           ]}
           fill
         />
+        <TrendChart
+          height={160}
+          categories={monthLabels}
+          series={[{ name: "Clients (continuing)", data: continuingClients.slice(from, to + 1), tone: "warning" }]}
+        />
 
         <Grid columns={4} gap={16}>
-          <Stat
-            value={fmtPct(CONT_TTM_YOY_SHIPPED)}
-            label="Shipped TTM YoY (continuing)"
-            tone="danger"
-          />
-          <Stat
-            value={fmtPct(CONT_TTM_YOY_CREATED)}
-            label="Created TTM YoY (continuing)"
-            tone="success"
-          />
-          <Stat
-            value={fmtPct(CONT_LAST_FULL_YOY_SHIPPED)}
-            label="Shipped YoY, Aug 2026"
-            tone="danger"
-          />
-          <Stat
-            value={`${CONT_TTM_CURR_FILL.toFixed(1)}%`}
-            label="Shipped / created, current TTM"
-            tone="danger"
-          />
+          {hasContinuingComparison ? (
+            <>
+              <Stat
+                value={fmtPct(continuingShippedChange)}
+                label="Shipped vs prior year (continuing)"
+                tone={continuingShippedChange < 0 ? "danger" : "success"}
+              />
+              <Stat
+                value={fmtPct(continuingCreatedChange)}
+                label="Created vs prior year (continuing)"
+                tone={continuingCreatedChange < 0 ? "danger" : "success"}
+              />
+            </>
+          ) : null}
+          <Stat value={`${continuingFill.toFixed(1)}%`} label="Shipped / created (continuing)" />
+          <Stat value={String(continuingClientPeak)} label="Peak monthly clients (continuing)" />
         </Grid>
-
-        <Text tone="tertiary">
-          TTM = Sep 2025-Aug 2026 vs Sep 2024-Aug 2025.{" "}
-          {CONT_TTM_PREV_SHIPPED.toLocaleString()} shipped orders became{" "}
-          {CONT_TTM_CURR_SHIPPED.toLocaleString()}, while created orders rose from{" "}
-          {CONT_TTM_PREV_CREATED.toLocaleString()} to{" "}
-          {CONT_TTM_CURR_CREATED.toLocaleString()}. Created is up{" "}
-          {fmtPct(CONT_TTM_YOY_CREATED)} and shipped is down{" "}
-          {fmtPct(CONT_TTM_YOY_SHIPPED)}, so fill fell from{" "}
-          {CONT_TTM_PREV_FILL.toFixed(1)}% to {CONT_TTM_CURR_FILL.toFixed(1)}% -
-          the gap is mostly Accurate Freight Systems, which creates orders that
-          never record a shipment. Aug 2026 created is{" "}
-          {fmtPct(CONT_LAST_FULL_YOY_CREATED)} YoY.
-        </Text>
       </Stack>
         </>
       ) : null}
 
-      <Grid columns={2} gap={16}>
+      {top.length > 0 || dbPeriod.length > 0 ? (
+      <Grid columns={top.length > 0 && dbPeriod.length > 0 ? 2 : 1} gap={16}>
+        {top.length > 0 ? (
         <Card>
           <CardHeader>Top companies by shipped, created, and clients</CardHeader>
           <CardBody>
@@ -1256,13 +1374,20 @@ function DashboardTab() {
               series={[
                 { name: "OrderShippedCount", data: top.map((r) => r.shipped), tone: "success" },
                 { name: "OrderCreatedCount", data: top.map((r) => r.created), tone: "info" },
+              ]}
+            />
+            <BarChart
+              horizontal
+              height={260}
+              categories={top.map((r) => r.company)}
+              series={[
                 { name: "Peak monthly clients", data: top.map((r) => r.clientsPeak), tone: "warning" },
               ]}
             />
             <Text tone="tertiary">
               Source: MSSQL | {selectedRange.label} | {scopeLabel} | sorted by
-              shipped. Peak monthly clients is on the same chart; the table below
-              is the readable scale for that series.
+              shipped. Client counts are on a separate chart because the order
+              scale would hide them.
             </Text>
             <Table
               headers={["Company", "Shipped", "Created", "Peak clients"]}
@@ -1276,6 +1401,8 @@ function DashboardTab() {
             />
           </CardBody>
         </Card>
+        ) : null}
+        {dbPeriod.length > 0 ? (
         <Card>
           <CardHeader>Volume by database</CardHeader>
           <CardBody>
@@ -1286,12 +1413,19 @@ function DashboardTab() {
               series={[
                 { name: "Created", data: dbPeriod.map((r) => r.created), tone: "info" },
                 { name: "Shipped", data: dbPeriod.map((r) => r.shipped), tone: "success" },
+              ]}
+            />
+            <BarChart
+              horizontal
+              height={260}
+              categories={dbPeriod.map((r) => r.db)}
+              series={[
                 { name: "Peak monthly clients", data: dbPeriod.map((r) => r.clientsPeak), tone: "warning" },
               ]}
             />
             <Text tone="tertiary">
-              Source: MSSQL | {selectedRange.label} | {scopeLabel} | orders and
-              peak monthly clients
+              Source: MSSQL | {selectedRange.label} | {scopeLabel} | orders on
+              one chart, peak monthly clients on the other
             </Text>
             <Table
               headers={["Database", "Shipped", "Created", "Peak clients"]}
@@ -1305,18 +1439,21 @@ function DashboardTab() {
             />
           </CardBody>
         </Card>
+        ) : null}
       </Grid>
+      ) : null}
 
+      {offboardedRows.length > 0 ? (
       <Stack gap={8}>
         <H2>Where the volume went - offboarded accounts</H2>
         <Text tone="tertiary">
-          Source: MSSQL | prior-year TTM shipped orders for accounts with no 2026
-          activity | orders lost. All but Knight Swift are Flexport clients.
+          Source: MSSQL | prior-year shipped orders for matching accounts with no
+          current-period shipments | {scopeLabel} | {selectedRange.label}
         </Text>
         <BarChart
           horizontal
           height={240}
-          categories={offboardedRows.slice(0, 6).map((r) => entityClient(r) || r.company)}
+          categories={offboardedRows.slice(0, 6).map((r) => r.client || r.company)}
           series={[{ name: "Prior-year shipped orders now at zero", data: offboardedRows.slice(0, 6).map((r) => r.lost), tone: "danger" }]}
         />
         <Table
@@ -1324,13 +1461,14 @@ function DashboardTab() {
           columnAlign={["left", "left", "left", "left", "right"]}
           rows={offboardedRows.map((r) => [
             r.db,
-            entityCompany(r),
-            entityClient(r) || "-",
+            r.company,
+            r.client || "-",
             r.lastActive,
             r.lost.toLocaleString(),
           ])}
         />
       </Stack>
+      ) : null}
 
       {declinerRows.length > 0 || growerRows.length > 0 ? (
       <Grid columns={declinerRows.length > 0 && growerRows.length > 0 ? 2 : 1} gap={16}>
@@ -1381,20 +1519,22 @@ function DashboardTab() {
       </Grid>
       ) : null}
 
+      {concentration.length > 0 ? (
       <Stack gap={8}>
         <H2>Revenue-risk concentration</H2>
         <Text tone="tertiary">
-          Source: MSSQL | TTM shipped orders | share of the 5.22M total. Pepsi alone
-          is 29% of remaining volume, so one account now drives the trend.
+          Source: MSSQL | share of {shipped.toLocaleString()} shipped orders for{" "}
+          {scopeLabel} | {selectedRange.label}
         </Text>
         <BarChart
           horizontal
           height={250}
-          categories={CONCENTRATION.map((r) => r.company)}
-          series={[{ name: "Share of TTM shipped orders", data: CONCENTRATION.map((r) => r.share), tone: "info" }]}
+          categories={concentration.map((r) => r.company)}
+          series={[{ name: "Share of selected shipped orders", data: concentration.map((r) => Number(r.share.toFixed(1))), tone: "info" }]}
           valueSuffix="%"
         />
       </Stack>
+      ) : null}
 
       <Stack gap={8}>
         <H2>Company totals</H2>
@@ -1417,10 +1557,12 @@ function DashboardTab() {
         />
       </Stack>
 
+      {fillRows.length > 0 ? (
       <Stack gap={8}>
         <H2>Data quality - created vs shipped mismatches</H2>
         <Text tone="tertiary">
-          Source: MSSQL | TTM | accounts where shipped/created falls outside 90-105%
+          Source: MSSQL | {selectedRange.label} | {scopeLabel} | accounts where
+          shipped/created falls outside 80-120%
         </Text>
         <Table
           headers={["Database", "Company", "Created", "Shipped", "Fill %"]}
@@ -1433,12 +1575,8 @@ function DashboardTab() {
             r.fill.toFixed(1),
           ])}
         />
-        <Text tone="tertiary">
-          Accurate Freight Systems is the extreme case: 1.50M created against 55K
-          shipped. Either an integration creates orders that never ship, or
-          shipments are recorded outside SHIP_SHIPMENTDATETIME.
-        </Text>
       </Stack>
+      ) : null}
 
       <Callout tone="info">
         Created = distinct warehouse orders by CreatedDate. Shipped on six
