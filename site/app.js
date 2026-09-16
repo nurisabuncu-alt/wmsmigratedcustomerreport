@@ -40,7 +40,7 @@
     return { year: p[0], q: Math.ceil(p[1] / 3) };
   }
 
-  var ALL_TIME = { value: "all", label: "All time (Jun 2024 - Aug 2026)", from: 0, to: MONTHS.length - 1 };
+  var ALL_TIME = { value: "all", label: "All time (Jun 2024 - Sep 16, 2026)", from: 0, to: MONTHS.length - 1 };
   var QUARTER_RANGES = [];
   (function buildQuarters() {
     var i = 0;
@@ -113,6 +113,79 @@
     });
     return map;
   }
+  function hasVolumeInRange(row, from, to) {
+    for (var i = from; i <= to; i++) {
+      if (row.created[i] > 0 || row.shipped[i] > 0) return true;
+    }
+    return false;
+  }
+  function distinctCounts(rows, from, to) {
+    var companies = Object.create(null);
+    var clients = Object.create(null);
+    var companyCount = 0;
+    var clientCount = 0;
+    rows.forEach(function (row) {
+      if (!hasVolumeInRange(row, from, to)) return;
+      if (!companies[row.company]) {
+        companies[row.company] = true;
+        companyCount += 1;
+      }
+      var clientKey = row.db + "|" + row.company + "|" + (row.client || "");
+      if (!clients[clientKey]) {
+        clients[clientKey] = true;
+        clientCount += 1;
+      }
+    });
+    return { companies: companyCount, clients: clientCount };
+  }
+  // Per-company data presence for the last five months: does each Migrated
+  // company have created and/or shipped orders in that month at all?
+  function migratedMonthlyCoverage() {
+    var from = Math.max(0, MONTHS.length - 5);
+    var to = MONTHS.length - 1;
+    var byCompany = {};
+    COMPANY_ROSTER.forEach(function (entry) {
+      if (companyStatus(entry.company) === "Migrated") byCompany[entry.company] = [];
+    });
+    ENTITIES.forEach(function (r) {
+      if (byCompany[r.company]) byCompany[r.company].push(r);
+    });
+    var rows = Object.keys(byCompany).sort().map(function (company) {
+      var created = seriesSum(byCompany[company], "created");
+      var shipped = seriesSum(byCompany[company], "shipped");
+      var months = [];
+      for (var i = from; i <= to; i++) {
+        months.push({ created: created[i] > 0, shipped: shipped[i] > 0 });
+      }
+      return { company: company, months: months };
+    });
+    return { from: from, to: to, rows: rows };
+  }
+  function coverageCell(month) {
+    if (month.created && month.shipped) return "Created + shipped";
+    if (month.created) return "Created only";
+    if (month.shipped) return "Shipped only";
+    return "No data";
+  }
+  function appendMigratedCoverage(root) {
+    var data = migratedMonthlyCoverage();
+    var h = document.createElement("h2");
+    h.textContent = "Migrated companies - order data by month (last 5 months)";
+    root.appendChild(h);
+    var note = document.createElement("p");
+    note.className = "muted";
+    var span = (MONTH_LABELS[data.from] || "") + " – " + (MONTH_LABELS[data.to] || "");
+    if (MONTHS[data.to] === "2026-09") span += " (September partial through Sep 16)";
+    note.textContent = "Static report, not affected by the filters. Every company with status Migrated on the WMS list, and whether any created or shipped orders exist in each month (" + span + ").";
+    root.appendChild(note);
+    var headers = ["Company"].concat(MONTH_LABELS.slice(data.from, data.to + 1));
+    var wrap = document.createElement("div");
+    wrap.className = "scroll";
+    wrap.appendChild(table(headers, data.rows.map(function (r) {
+      return [r.company].concat(r.months.map(coverageCell));
+    }), headers.length));
+    root.appendChild(wrap);
+  }
   function companyPeakClients(rows, from, to) {
     var months = {};
     rows.forEach(function (row) {
@@ -126,6 +199,24 @@
       peaks[company] = peak;
     });
     return peaks;
+  }
+  // Distinct companies with order activity in each month of the range. Many rows
+  // share a company, so summing the per-row client counts would overcount.
+  function activeCompaniesPerMonth(rows, from, to) {
+    var out = [];
+    for (var i = from; i <= to; i++) {
+      var seen = Object.create(null);
+      var count = 0;
+      for (var j = 0; j < rows.length; j++) {
+        var row = rows[j];
+        if ((row.created[i] > 0 || row.shipped[i] > 0) && !seen[row.company]) {
+          seen[row.company] = true;
+          count += 1;
+        }
+      }
+      out.push(count);
+    }
+    return out;
   }
   function companyMovers(rows, currFrom, currTo) {
     var prevFrom = currFrom - 12;
@@ -150,13 +241,84 @@
     return { decliners: decliners, growers: growers };
   }
 
+  var STATUS_STORAGE = "wms-company-status-v1";
+  var rosterByName = {};
+  COMPANY_ROSTER.forEach(function (r) { rosterByName[r.company] = r.status; });
+  function loadStatusOverrides() {
+    try { return JSON.parse(localStorage.getItem(STATUS_STORAGE) || "{}"); } catch (e) { return {}; }
+  }
+  function saveStatusOverride(company, status) {
+    var m = loadStatusOverrides();
+    if (status === rosterByName[company]) delete m[company];
+    else m[company] = status;
+    localStorage.setItem(STATUS_STORAGE, JSON.stringify(m));
+  }
+  function clearStatusOverrides() {
+    localStorage.removeItem(STATUS_STORAGE);
+  }
+  function applyStatusFeed(rows) {
+    var m = loadStatusOverrides();
+    rows.forEach(function (r) {
+      if (!r || !r.company || !r.status) return;
+      if (r.status === rosterByName[r.company]) delete m[r.company];
+      else m[r.company] = r.status;
+      if (!rosterByName[r.company]) {
+        COMPANY_ROSTER.push({ company: r.company, status: r.status });
+        rosterByName[r.company] = r.status;
+      }
+    });
+    localStorage.setItem(STATUS_STORAGE, JSON.stringify(m));
+  }
+  function companyStatus(name) {
+    var over = loadStatusOverrides();
+    if (Object.prototype.hasOwnProperty.call(over, name)) return over[name];
+    return rosterByName[name] || "";
+  }
+  function rowsForStatus(rows, status) {
+    if (status === "all") return rows;
+    if (status === "roster") {
+      return rows.filter(function (r) { return !!rosterByName[r.company]; });
+    }
+    return rows.filter(function (r) { return companyStatus(r.company) === status; });
+  }
+  function parseStatusFeed(text) {
+    var trimmed = String(text || "").trim();
+    if (!trimmed) return [];
+    try {
+      var json = JSON.parse(trimmed);
+      var list = Array.isArray(json) ? json : json.companies || json.rows || json.data || [];
+      return list.map(function (r) {
+        if (Array.isArray(r)) return { company: r[0], status: r[1] };
+        return { company: r.company || r.Company || r.name, status: r.status || r.Status };
+      }).filter(function (r) { return r.company && r.status; });
+    } catch (e) { /* HTML table from the Apps Script UI */ }
+    var doc = new DOMParser().parseFromString(trimmed, "text/html");
+    var out = [];
+    doc.querySelectorAll("tr").forEach(function (tr) {
+      var cells = Array.prototype.map.call(tr.querySelectorAll("th,td"), function (c) { return c.textContent.trim(); });
+      if (cells.length >= 2 && cells[0] && cells[0].toLowerCase() !== "company") {
+        out.push({ company: cells[0], status: cells[1] });
+      }
+    });
+    return out;
+  }
+  function snapshotShippedByCompany() {
+    var map = {};
+    ENTITIES.forEach(function (r) {
+      map[r.company] = (map[r.company] || 0) + r.shipped.reduce(function (s, v) { return s + v; }, 0);
+    });
+    return map;
+  }
+
   var state = {
-    tab: "dashboard",
+    tab: "datastudio",
     db: "all",
     company: "all",
     client: "all",
     quarter: "all",
     month: "none",
+    status: "roster",
+    statusMessage: "",
   };
 
   function destroyCharts() {
@@ -184,6 +346,80 @@
       },
     };
   }
+  function abbrevTick(value) {
+    var n = Number(value);
+    if (n >= 1000000) return Number((n / 1000000).toFixed(1)) + "M";
+    if (n >= 1000) return Number((n / 1000).toFixed(1)) + "K";
+    return String(n);
+  }
+  // Looker Studio combo dashlet: order counts as grouped bars on the left axis,
+  // company count as a line on a secondary right axis so the small number rides
+  // above the bars instead of flattening against the baseline.
+  function ordersByCompanyCombo(labels, shipped, created, company) {
+    var single = labels.length < 2;
+    return {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          {
+            type: "line",
+            label: "Company",
+            data: company,
+            yAxisID: "yCompany",
+            borderColor: "#4C8DF6",
+            backgroundColor: "#4C8DF6",
+            borderWidth: 2,
+            pointRadius: single ? 4 : 3,
+            pointHoverRadius: 6,
+            pointHitRadius: 18,
+            tension: 0,
+            fill: false,
+          },
+          { label: "OrderShippedCount", data: shipped, yAxisID: "y", backgroundColor: "#FF9E32" },
+          { label: "OrderCreatedCount", data: created, yAxisID: "y", backgroundColor: "#9E6DE0" },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top", align: "start", labels: { boxWidth: 12, boxHeight: 12 } },
+          tooltip: {
+            enabled: true,
+            mode: "index",
+            intersect: false,
+            callbacks: {
+              label: function (ctx) {
+                var value = ctx.parsed && ctx.parsed.y != null ? ctx.parsed.y : ctx.raw;
+                if (ctx.dataset.label === "Company") return "Company: " + value;
+                return ctx.dataset.label + ": " + Number(value).toLocaleString();
+              },
+            },
+          },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            type: "linear",
+            position: "left",
+            beginAtZero: true,
+            title: { display: true, text: "OrderShippedCount | OrderCreatedCount" },
+            ticks: { callback: abbrevTick },
+          },
+          yCompany: {
+            type: "linear",
+            position: "right",
+            beginAtZero: true,
+            title: { display: true, text: "Company" },
+            grid: { drawOnChartArea: false },
+            ticks: { precision: 0 },
+          },
+        },
+      },
+    };
+  }
   function hBar(labels, datasets, suffix) {
     return {
       type: "bar",
@@ -198,6 +434,10 @@
     };
   }
 
+  function statusFilterOpts() {
+    return [{ value: "roster", label: "All companies on WMS list" }, { value: "all", label: "All snapshot companies" }]
+      .concat(COMPANY_STATUS_OPTIONS.map(function (s) { return { value: s, label: s }; }));
+  }
   function sel(id, value, opts, onChange) {
     var s = document.createElement("select");
     s.id = id;
@@ -270,7 +510,10 @@
     var selectedRange = resolvePeriod(state.quarter, state.month);
     var from = selectedRange.from, to = selectedRange.to;
     var monthLabels = MONTH_LABELS.slice(from, to + 1);
-    var inDatabase = state.db === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.db; });
+    var inDatabase = rowsForStatus(
+      state.db === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.db; }),
+      state.status
+    );
     var companyOptions = [];
     inDatabase.forEach(function (r) { if (companyOptions.indexOf(r.company) < 0) companyOptions.push(r.company); });
     companyOptions.sort();
@@ -291,7 +534,6 @@
     var chartCreated = scopeCreated.slice(from, to + 1);
     var chartShipped = scopeShipped.slice(from, to + 1);
     var chartClients = scopeClients.slice(from, to + 1);
-    var clientsPeak = chartClients.length ? Math.max.apply(null, chartClients) : 0;
     var created = filtered.reduce(function (s, r) { return s + r.created; }, 0);
     var shipped = filtered.reduce(function (s, r) { return s + r.shipped; }, 0);
     var fill = created === 0 ? 0 : (100 * shipped) / created;
@@ -310,9 +552,8 @@
     var scopeSeqShipped = isAllTime
       ? pctChange(scopeShipped[last], scopeShipped[last - 1])
       : hasPriorPeriod ? pctChange(sumRange(scopeShipped, from, to), sumRange(scopeShipped, priorFrom, from - 1)) : 0;
-    var yoyLabel = isAllTime ? "YoY (Aug 2026 vs Aug 2025)" : isMonth ? "YoY vs same month last year" : "YoY vs same quarter last year";
-    var seqLabel = isAllTime ? "MoM (Aug vs Jul 2026)" : isMonth ? "vs prior month" : "vs prior quarter";
-    var clientsYoy = from >= 12 ? pctChange(peakIn(scopeClients, from, to), peakIn(scopeClients, from - 12, to - 12)) : 0;
+    var yoyLabel = isAllTime ? "Latest-month YoY (Sep partial vs Sep 2025)" : isMonth ? "YoY vs same month last year" : "YoY vs same quarter last year";
+    var seqLabel = isAllTime ? "Latest-month change (Sep partial vs Aug 2026)" : isMonth ? "vs prior month" : "vs prior quarter";
     var scopeLabel = state.client !== "all" ? state.client : state.company !== "all" ? state.company : state.db === "all" ? "all databases" : state.db;
     var portfolioView = state.company === "all" && state.client === "all";
     var moverFrom = isAllTime ? 15 : from;
@@ -373,7 +614,7 @@
 
     var intro = document.createElement("p");
     intro.className = "lede";
-    intro.textContent = "Order created vs shipped across three servers and seven databases, Jun 2024 - Aug 2026. Test companies excluded. DeliverrLiveDB IDs are Flexport clients, so company-grain views count them once. Every figure below follows the filters.";
+    intro.textContent = "Order created vs shipped across three servers and seven databases, Jun 2024 - Sep 16, 2026. SQL was extracted without a COMP_ID filter; the default graph scope is the WMS company list. Every figure below follows the filters.";
     root.appendChild(intro);
     var pills = document.createElement("div");
     pills.className = "pills";
@@ -394,12 +635,12 @@
     call.className = "callout";
     call.textContent = scopeLabel + " | " + selectedRange.label + ": " +
       created.toLocaleString() + " orders created, " + shipped.toLocaleString() +
-      " shipped, " + fill.toFixed(1) + "% shipped/created, and " + clientsPeak +
-      " peak monthly clients.";
+      " shipped, " + fill.toFixed(1) + "% shipped/created.";
     root.appendChild(call);
 
     var filters = document.createElement("div");
     filters.className = "filters";
+    filters.appendChild(labeled("Status", sel("status", state.status, statusFilterOpts(), function (v) { state.status = v; state.company = "all"; state.client = "all"; render(); })));
     filters.appendChild(labeled("Database", sel("db", state.db, [{ value: "all", label: "All databases" }].concat(DB_TOTALS.map(function (r) { return { value: r.db, label: r.db }; })), function (v) { state.db = v; state.company = "all"; state.client = "all"; render(); })));
     filters.appendChild(labeled("Company", sel("co", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; state.client = "all"; render(); })));
     filters.appendChild(labeled("Client", clientSelect("cl", clientOptions)));
@@ -420,20 +661,20 @@
     stats.appendChild(stat(fmt(created), "Orders created (period)"));
     stats.appendChild(stat(fmt(shipped), "Orders shipped (period)"));
     stats.appendChild(stat(fill.toFixed(1) + "%", "Shipped / created"));
-    stats.appendChild(stat(String(clientsPeak), "Peak monthly clients"));
     stats.appendChild(stat(fmtPct(scopeYoyCreated), "Created " + yoyLabel, scopeYoyCreated < 0 ? "bad" : "ok"));
     stats.appendChild(stat(fmtPct(scopeYoyShipped), "Shipped " + yoyLabel, scopeYoyShipped < 0 ? "bad" : "ok"));
     if (isAllTime || hasPriorPeriod) {
       stats.appendChild(stat(fmtPct(scopeSeqCreated), "Created " + seqLabel, scopeSeqCreated < 0 ? "bad" : "ok"));
       stats.appendChild(stat(fmtPct(scopeSeqShipped), "Shipped " + seqLabel, scopeSeqShipped < 0 ? "bad" : "ok"));
     }
-    stats.appendChild(stat(String(filtered.length), "Companies with volume"));
-    stats.appendChild(stat(fmtPct(clientsYoy), "Peak clients YoY", clientsYoy < 0 ? "bad" : "ok"));
+    var counts = distinctCounts(scopeEntities, from, to);
+    stats.appendChild(stat(String(counts.companies), "Total companies"));
+    stats.appendChild(stat(String(counts.clients), "Total clients"));
     root.appendChild(stats);
 
     var cap = document.createElement("p");
     cap.className = "muted";
-    cap.textContent = "Filters: Database, Company, Client, and either Quarter or Month. August 2026 is a complete month. Client names were extracted only for Flexport on DeliverrLiveDB; the other databases report client counts but not names. " + scopeLabel + " | " + selectedRange.label;
+    cap.textContent = "Filters: Status, Database, Company, Client, and either Quarter or Month. Default Status includes every company on the WMS list. September 2026 is partial through Sep 16. " + scopeLabel + " | " + selectedRange.label + " | " + state.status;
     root.appendChild(cap);
 
     var h2 = document.createElement("h2");
@@ -458,6 +699,7 @@
     addChart(c2, lineOrBar(monthLabels, [
       { label: "Clients", data: chartClients, borderColor: "#9a6700", backgroundColor: "rgba(154,103,0,0.15)", tension: 0.2, fill: true },
     ]));
+    appendMigratedCoverage(root);
 
     if (continuingCount) {
       var hCont = document.createElement("h2");
@@ -497,7 +739,6 @@
         contStats.appendChild(stat(fmtPct(continuingCreatedChange), "Created vs prior year (continuing)", continuingCreatedChange < 0 ? "bad" : "ok"));
       }
       contStats.appendChild(stat(continuingFill.toFixed(1) + "%", "Shipped / created (continuing)"));
-      contStats.appendChild(stat(String(Math.max.apply(null, [0].concat(continuingClients.slice(from, to + 1)))), "Peak monthly clients (continuing)"));
       root.appendChild(contStats);
     }
 
@@ -505,28 +746,19 @@
     grid.className = "grid2";
     var cardA = document.createElement("div");
     cardA.className = "card";
-    cardA.innerHTML = "<h3>Top companies by shipped, created, and clients</h3>";
+    cardA.innerHTML = "<h3>Top companies by shipped and created</h3>";
     var boxA = document.createElement("div");
     boxA.className = "chart-box";
     boxA.style.height = "360px";
     var cA = document.createElement("canvas");
     boxA.appendChild(cA);
     cardA.appendChild(boxA);
-    var boxAClients = document.createElement("div");
-    boxAClients.className = "chart-box client-chart";
-    boxAClients.style.height = "260px";
-    var cAClients = document.createElement("canvas");
-    boxAClients.appendChild(cAClients);
-    cardA.appendChild(boxAClients);
-    cardA.appendChild(table(["Company", "Shipped", "Created", "Peak clients"], top.map(function (r) {
-      return [r.company, r.shipped.toLocaleString(), r.created.toLocaleString(), String(r.clientsPeak)];
+    cardA.appendChild(table(["Company", "Shipped", "Created"], top.map(function (r) {
+      return [r.company, r.shipped.toLocaleString(), r.created.toLocaleString()];
     }), 1));
     addChart(cA, hBar(top.map(function (r) { return r.company; }), [
       { label: "OrderShippedCount", data: top.map(function (r) { return r.shipped; }), backgroundColor: "#1a7f37" },
       { label: "OrderCreatedCount", data: top.map(function (r) { return r.created; }), backgroundColor: "#0969da" },
-    ]));
-    addChart(cAClients, hBar(top.map(function (r) { return r.company; }), [
-      { label: "Peak monthly clients", data: top.map(function (r) { return r.clientsPeak; }), backgroundColor: "#9a6700" },
     ]));
     var cardB = document.createElement("div");
     cardB.className = "card";
@@ -537,21 +769,12 @@
     var cB = document.createElement("canvas");
     boxB.appendChild(cB);
     cardB.appendChild(boxB);
-    var boxBClients = document.createElement("div");
-    boxBClients.className = "chart-box client-chart";
-    boxBClients.style.height = "260px";
-    var cBClients = document.createElement("canvas");
-    boxBClients.appendChild(cBClients);
-    cardB.appendChild(boxBClients);
-    cardB.appendChild(table(["Database", "Shipped", "Created", "Peak clients"], dbPeriod.map(function (r) {
-      return [r.db, r.shipped.toLocaleString(), r.created.toLocaleString(), String(r.clientsPeak)];
+    cardB.appendChild(table(["Database", "Shipped", "Created"], dbPeriod.map(function (r) {
+      return [r.db, r.shipped.toLocaleString(), r.created.toLocaleString()];
     }), 1));
     addChart(cB, hBar(dbPeriod.map(function (r) { return r.db; }), [
       { label: "Created", data: dbPeriod.map(function (r) { return r.created; }), backgroundColor: "#0969da" },
       { label: "Shipped", data: dbPeriod.map(function (r) { return r.shipped; }), backgroundColor: "#1a7f37" },
-    ]));
-    addChart(cBClients, hBar(dbPeriod.map(function (r) { return r.db; }), [
-      { label: "Peak monthly clients", data: dbPeriod.map(function (r) { return r.clientsPeak; }), backgroundColor: "#9a6700" },
     ]));
     grid.appendChild(cardA);
     grid.appendChild(cardB);
@@ -583,8 +806,8 @@
         var cd = document.createElement("div");
         cd.className = "card";
         cd.innerHTML = "<h3>Shrinking companies (still shipping)</h3>";
-        cd.appendChild(table(["Company", isAllTime ? "Prior TTM" : "Prior", isAllTime ? "Current TTM" : "Current", "YoY", "Peak clients"], movers.decliners.map(function (r) {
-          return [r.company, r.prev.toLocaleString(), r.curr.toLocaleString(), fmtPct(r.yoy), String(r.clients)];
+        cd.appendChild(table(["Company", isAllTime ? "Prior TTM" : "Prior", isAllTime ? "Current TTM" : "Current", "YoY"], movers.decliners.map(function (r) {
+          return [r.company, r.prev.toLocaleString(), r.curr.toLocaleString(), fmtPct(r.yoy)];
         }), 1));
         mg.appendChild(cd);
       }
@@ -592,8 +815,8 @@
         var cg = document.createElement("div");
         cg.className = "card";
         cg.innerHTML = "<h3>Growing companies</h3>";
-        cg.appendChild(table(["Company", isAllTime ? "Prior TTM" : "Prior", isAllTime ? "Current TTM" : "Current", "YoY", "Peak clients"], movers.growers.map(function (r) {
-          return [r.company, r.prev.toLocaleString(), r.curr.toLocaleString(), fmtPct(r.yoy), String(r.clients)];
+        cg.appendChild(table(["Company", isAllTime ? "Prior TTM" : "Prior", isAllTime ? "Current TTM" : "Current", "YoY"], movers.growers.map(function (r) {
+          return [r.company, r.prev.toLocaleString(), r.curr.toLocaleString(), fmtPct(r.yoy)];
         }), 1));
         mg.appendChild(cg);
       }
@@ -622,8 +845,8 @@
     root.appendChild(hTot);
     var wrapT = document.createElement("div");
     wrapT.className = "scroll";
-    wrapT.appendChild(table(["Database", "Company", "Created", "Shipped", "Fill %", "Peak clients"], filtered.map(function (r) {
-      return [r.db, r.company, r.created.toLocaleString(), r.shipped.toLocaleString(), r.fill.toFixed(1), String(r.clientsPeak)];
+    wrapT.appendChild(table(["Database", "Company", "Created", "Shipped", "Fill %"], filtered.map(function (r) {
+      return [r.db, r.company, r.created.toLocaleString(), r.shipped.toLocaleString(), r.fill.toFixed(1)];
     }), 2));
     root.appendChild(wrapT);
 
@@ -642,8 +865,8 @@
   function renderDataStudio(root) {
     var selectedRange = resolvePeriod(state.quarter, state.month);
     var from = selectedRange.from, to = selectedRange.to;
-    var monthLabels = MONTH_LABELS.slice(from, to + 1);
-    var inDatabase = state.db === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.db; });
+    var inDatabaseAll = state.db === "all" ? ENTITIES : ENTITIES.filter(function (r) { return r.db === state.db; });
+    var inDatabase = rowsForStatus(inDatabaseAll, state.status);
     var companyOptions = [];
     inDatabase.forEach(function (r) { if (companyOptions.indexOf(r.company) < 0) companyOptions.push(r.company); });
     companyOptions.sort();
@@ -656,16 +879,21 @@
     var scopeRows = state.client === "all" ? inCompany : inCompany.filter(function (r) { return r.client === state.client; });
     var scopeCreated = seriesSum(scopeRows, "created");
     var scopeShipped = seriesSum(scopeRows, "shipped");
-    var scopeClients = seriesSum(scopeRows, "clients");
-    var slice = function (v) { return v.slice(from, to + 1); };
+    var monthLabels = MONTH_LABELS.slice(from, to + 1);
+    var allStatusCompany = state.company === "all" ? inDatabaseAll : inDatabaseAll.filter(function (r) { return r.company === state.company; });
+    var allStatusRows = state.client === "all" ? allStatusCompany : allStatusCompany.filter(function (r) { return r.client === state.client; });
+    var allCreated = seriesSum(allStatusRows, "created").slice(from, to + 1);
+    var allShipped = seriesSum(allStatusRows, "shipped").slice(from, to + 1);
+    var allCompanies = activeCompaniesPerMonth(allStatusRows, from, to);
 
     var p = document.createElement("p");
     p.className = "lede";
-    p.textContent = "Looker Studio replica: shipped vs created by month for the migrated accounts. Flexport clients appear in the Client filter.";
+    p.textContent = "Looker Studio replica: shipped vs created by month. The filters below drive the All Matching Accounts chart, the stats, and the raw data. The Migrated Accounts chart and the last-5-months coverage table are fixed reports.";
     root.appendChild(p);
 
     var filters = document.createElement("div");
     filters.className = "filters";
+    filters.appendChild(labeled("Status", sel("dsst", state.status, statusFilterOpts(), function (v) { state.status = v; state.company = "all"; state.client = "all"; render(); })));
     filters.appendChild(labeled("Database", sel("dsdb", state.db, [{ value: "all", label: "All databases" }].concat(DATABASES.map(function (d) { return { value: d, label: d }; })), function (v) { state.db = v; state.company = "all"; state.client = "all"; render(); })));
     filters.appendChild(labeled("Company", sel("dsco", state.company, [{ value: "all", label: "All companies" }].concat(companyOptions.map(function (c) { return { value: c, label: c }; })), function (v) { state.company = v; state.client = "all"; render(); })));
     filters.appendChild(labeled("Client", clientSelect("dscl", clientOptions)));
@@ -683,69 +911,48 @@
 
     var stats = document.createElement("div");
     stats.className = "stats";
+    var counts = distinctCounts(scopeRows, from, to);
     stats.appendChild(stat(fmt(sumRange(scopeShipped, from, to)), "OrderShippedCount (selection)"));
     stats.appendChild(stat(fmt(sumRange(scopeCreated, from, to)), "OrderCreatedCount (selection)"));
-    stats.appendChild(stat(String(Math.max.apply(null, [0].concat(slice(scopeClients)))), "Peak monthly clients"));
-    stats.appendChild(stat(String(scopeRows.length), "Rows (company / client)"));
+    stats.appendChild(stat(String(counts.companies), "Total companies"));
+    stats.appendChild(stat(String(counts.clients), "Total clients"));
     root.appendChild(stats);
 
-    var h = document.createElement("h2");
-    h.textContent = "Migrated accounts - shipped vs created";
-    root.appendChild(h);
-    var box = document.createElement("div");
-    box.className = "chart-box";
-    box.style.height = "300px";
-    var cv = document.createElement("canvas");
-    box.appendChild(cv);
-    root.appendChild(box);
-    addChart(cv, {
-      type: "bar",
-      data: {
-        labels: monthLabels,
-        datasets: [
-          { label: "OrderShippedCount", data: slice(scopeShipped), backgroundColor: "#0969da" },
-          { label: "OrderCreatedCount", data: slice(scopeCreated), backgroundColor: "#1a7f37" },
-        ],
-      },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } }, scales: { y: { beginAtZero: true } } },
-    });
-    var boxL = document.createElement("div");
-    boxL.className = "chart-box";
-    boxL.style.height = "150px";
-    var cvL = document.createElement("canvas");
-    boxL.appendChild(cvL);
-    root.appendChild(boxL);
-    addChart(cvL, lineOrBar(monthLabels, [{ label: "Client", data: slice(scopeClients), borderColor: "#9a6700", tension: 0.2, fill: true, backgroundColor: "rgba(154,103,0,0.15)" }]));
+    var migratedRows = rowsForStatus(ENTITIES, "Migrated");
+    var migratedShipped = seriesSum(migratedRows, "shipped");
+    var migratedCreated = seriesSum(migratedRows, "created");
+    var migratedCompanies = activeCompaniesPerMonth(migratedRows, 0, MONTHS.length - 1);
 
     var hAll = document.createElement("h2");
-    hAll.textContent = "All matching accounts";
+    hAll.textContent = "All Matching Accounts Order Shipped VS Created Count per Company per Month";
     root.appendChild(hAll);
+    var allNote = document.createElement("p");
+    allNote.className = "muted";
+    allNote.textContent = "Ignores Status. Includes every company matching Database, Company, Client, and period, across all WMS list statuses.";
+    root.appendChild(allNote);
     var boxA = document.createElement("div");
     boxA.className = "chart-box";
-    boxA.style.height = "280px";
+    boxA.style.height = "320px";
     var cvA = document.createElement("canvas");
     boxA.appendChild(cvA);
     root.appendChild(boxA);
-    addChart(cvA, {
-      type: "bar",
-      data: {
-        labels: monthLabels,
-        datasets: [
-          { label: "OrderShippedCount", data: slice(scopeShipped), backgroundColor: "#0969da" },
-          { label: "OrderCreatedCount", data: slice(scopeCreated), backgroundColor: "#1a7f37" },
-        ],
-      },
-      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "bottom" } }, scales: { y: { beginAtZero: true } } },
-    });
-    var boxAClients = document.createElement("div");
-    boxAClients.className = "chart-box";
-    boxAClients.style.height = "160px";
-    var cvAClients = document.createElement("canvas");
-    boxAClients.appendChild(cvAClients);
-    root.appendChild(boxAClients);
-    addChart(cvAClients, lineOrBar(monthLabels, [
-      { label: "Client count", data: slice(scopeClients), borderColor: "#9a6700", backgroundColor: "rgba(154,103,0,0.15)", tension: 0.2, fill: true },
-    ]));
+    addChart(cvA, ordersByCompanyCombo(monthLabels, allShipped, allCreated, allCompanies));
+
+    var h = document.createElement("h2");
+    h.textContent = "Migrated Accounts Order Shipped VS Created Count per Company per Month";
+    root.appendChild(h);
+    var comboNote = document.createElement("p");
+    comboNote.className = "muted";
+    comboNote.textContent = "Static report: Migrated companies only, every month in the snapshot. The filters above do not change it. Order counts are grouped bars on the left axis; the blue line is the number of distinct companies with order activity that month, on the right axis.";
+    root.appendChild(comboNote);
+    var box = document.createElement("div");
+    box.className = "chart-box";
+    box.style.height = "320px";
+    var cv = document.createElement("canvas");
+    box.appendChild(cv);
+    root.appendChild(box);
+    addChart(cv, ordersByCompanyCombo(MONTH_LABELS, migratedShipped, migratedCreated, migratedCompanies));
+    appendMigratedCoverage(root);
 
     var rawRows = [];
     for (var monthIndex = to; monthIndex >= from; monthIndex--) {
@@ -771,12 +978,185 @@
     root.appendChild(hRaw);
     var rawNote = document.createElement("p");
     rawNote.className = "muted";
-    rawNote.textContent = rawRows.length.toLocaleString() + " rows matching all active filters. Newest month first.";
     root.appendChild(rawNote);
     var rawWrap = document.createElement("div");
     rawWrap.className = "scroll raw-data";
-    rawWrap.appendChild(table(["Month", "Database", "Company", "Client", "Created", "Shipped", "Clients"], rawRows, 4));
     root.appendChild(rawWrap);
+    // Building every matching row at once locks up the browser on wide filters,
+    // so the table grows in pages on demand.
+    var RAW_PAGE = 500;
+    var shown = 0;
+    var moreWrap = document.createElement("div");
+    moreWrap.className = "filters";
+    var more = document.createElement("button");
+    more.className = "tab";
+    more.type = "button";
+    moreWrap.appendChild(more);
+    root.appendChild(moreWrap);
+    var rawTable = table(["Month", "Database", "Company", "Client", "Created", "Shipped", "Clients"], [], 4);
+    var rawBody = rawTable.querySelector("tbody");
+    rawWrap.appendChild(rawTable);
+    function showMoreRows() {
+      var next = Math.min(shown + RAW_PAGE, rawRows.length);
+      var frag = document.createDocumentFragment();
+      for (var i = shown; i < next; i++) {
+        var tr = document.createElement("tr");
+        rawRows[i].forEach(function (cell, ci) {
+          var td = document.createElement("td");
+          td.textContent = cell;
+          if (ci >= 4) td.className = "num";
+          tr.appendChild(td);
+        });
+        frag.appendChild(tr);
+      }
+      rawBody.appendChild(frag);
+      shown = next;
+      rawNote.textContent = rawRows.length.toLocaleString() + " rows matching all active filters. Newest month first. Showing " +
+        shown.toLocaleString() + " of " + rawRows.length.toLocaleString() + ".";
+      var remaining = rawRows.length - shown;
+      more.textContent = "Show " + Math.min(RAW_PAGE, remaining).toLocaleString() + " more rows";
+      moreWrap.style.display = remaining > 0 ? "" : "none";
+    }
+    more.onclick = showMoreRows;
+    showMoreRows();
+  }
+
+  function renderCompanyList(root) {
+    var shippedMap = snapshotShippedByCompany();
+    var intro = document.createElement("p");
+    intro.className = "lede";
+    intro.textContent = "WMS company list (" + COMPANY_ROSTER.length + "). Change a status here and the dashboard and Data Studio tabs follow it. Edits stay in this browser until you reset.";
+    root.appendChild(intro);
+
+    var actions = document.createElement("div");
+    actions.className = "filters";
+    var refresh = document.createElement("button");
+    refresh.className = "tab";
+    refresh.type = "button";
+    refresh.textContent = "Refresh status from Logiwa app";
+    refresh.onclick = function () {
+      state.statusMessage = "Refreshing…";
+      render();
+      fetch(STATUS_FEED_URL, { credentials: "include" }).then(function (res) { return res.text(); }).then(function (text) {
+        var rows = parseStatusFeed(text);
+        if (!rows.length) throw new Error("The Logiwa app did not return a company/status table. Sign in at the app URL, then paste JSON below.");
+        applyStatusFeed(rows);
+        state.statusMessage = "Updated " + rows.length + " statuses from the Logiwa app.";
+        render();
+      }).catch(function (err) {
+        state.statusMessage = "Could not read the Logiwa app (" + (err && err.message ? err.message : err) + "). It requires a logiwa.com Google login. Paste JSON {\"companies\":[{\"company\":\"Name\",\"status\":\"Migrated\"}]} below, or edit rows by hand.";
+        render();
+      });
+    };
+    actions.appendChild(refresh);
+    var reset = document.createElement("button");
+    reset.className = "tab";
+    reset.type = "button";
+    reset.textContent = "Reset to WMS list";
+    reset.onclick = function () {
+      clearStatusOverrides();
+      state.statusMessage = "Statuses restored from the WMS company list workbook.";
+      render();
+    };
+    actions.appendChild(reset);
+    var link = document.createElement("a");
+    link.href = STATUS_FEED_URL;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "Open Logiwa status app";
+    actions.appendChild(link);
+    root.appendChild(actions);
+
+    if (state.statusMessage) {
+      var msg = document.createElement("p");
+      msg.className = "callout info";
+      msg.textContent = state.statusMessage;
+      root.appendChild(msg);
+    }
+
+    var pasteWrap = document.createElement("div");
+    pasteWrap.className = "card";
+    var pasteLabel = document.createElement("p");
+    pasteLabel.className = "muted";
+    pasteLabel.textContent = "If live refresh is blocked, paste a JSON company/status list and apply it.";
+    pasteWrap.appendChild(pasteLabel);
+    var ta = document.createElement("textarea");
+    ta.rows = 4;
+    ta.style.width = "100%";
+    ta.placeholder = '{"companies":[{"company":"Flexport","status":"Migrated"}]}';
+    pasteWrap.appendChild(ta);
+    var applyPaste = document.createElement("button");
+    applyPaste.className = "tab";
+    applyPaste.type = "button";
+    applyPaste.textContent = "Apply pasted statuses";
+    applyPaste.onclick = function () {
+      var rows = parseStatusFeed(ta.value);
+      if (!rows.length) {
+        state.statusMessage = "No company/status rows found in the pasted text.";
+      } else {
+        applyStatusFeed(rows);
+        state.statusMessage = "Applied " + rows.length + " pasted statuses.";
+      }
+      render();
+    };
+    pasteWrap.appendChild(applyPaste);
+    root.appendChild(pasteWrap);
+
+    var counts = {};
+    COMPANY_STATUS_OPTIONS.forEach(function (s) { counts[s] = 0; });
+    COMPANY_ROSTER.forEach(function (r) {
+      var st = companyStatus(r.company);
+      counts[st] = (counts[st] || 0) + 1;
+    });
+    var stats = document.createElement("div");
+    stats.className = "stats";
+    COMPANY_STATUS_OPTIONS.forEach(function (s) {
+      stats.appendChild(stat(String(counts[s] || 0), s));
+    });
+    root.appendChild(stats);
+
+    var list = COMPANY_ROSTER.slice().sort(function (a, b) {
+      var sa = companyStatus(a.company);
+      var sb = companyStatus(b.company);
+      if (sa !== sb) return sa.localeCompare(sb);
+      return a.company.localeCompare(b.company);
+    });
+    var t = document.createElement("table");
+    var thead = document.createElement("thead");
+    thead.innerHTML = "<tr><th>Company</th><th>Status</th><th>In volume snapshot</th><th class=\"num\">Shipped (all time)</th></tr>";
+    t.appendChild(thead);
+    var tb = document.createElement("tbody");
+    list.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var tdName = document.createElement("td");
+      tdName.textContent = r.company;
+      tr.appendChild(tdName);
+      var tdStatus = document.createElement("td");
+      var current = companyStatus(r.company);
+      var statusSel = sel("st-" + r.company.replace(/[^a-z0-9]+/gi, "-"), current, COMPANY_STATUS_OPTIONS.map(function (s) {
+        return { value: s, label: s };
+      }), function (v) {
+        saveStatusOverride(r.company, v);
+        render();
+      });
+      statusSel.className = "status-" + current.toLowerCase();
+      tdStatus.appendChild(statusSel);
+      tr.appendChild(tdStatus);
+      var shippedVal = shippedMap[r.company] || 0;
+      var tdSnap = document.createElement("td");
+      tdSnap.textContent = shippedVal > 0 ? "Yes" : "No";
+      tr.appendChild(tdSnap);
+      var tdShipped = document.createElement("td");
+      tdShipped.className = "num";
+      tdShipped.textContent = shippedVal ? shippedVal.toLocaleString() : "-";
+      tr.appendChild(tdShipped);
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    var wrap = document.createElement("div");
+    wrap.className = "scroll raw-data";
+    wrap.appendChild(t);
+    root.appendChild(wrap);
   }
 
   function render() {
@@ -785,11 +1165,14 @@
     root.innerHTML = "";
     document.getElementById("tab-dashboard").classList.toggle("active", state.tab === "dashboard");
     document.getElementById("tab-datastudio").classList.toggle("active", state.tab === "datastudio");
+    document.getElementById("tab-companies").classList.toggle("active", state.tab === "companies");
     if (state.tab === "dashboard") renderDashboard(root);
-    else renderDataStudio(root);
+    else if (state.tab === "datastudio") renderDataStudio(root);
+    else renderCompanyList(root);
   }
 
   document.getElementById("tab-dashboard").onclick = function () { state.tab = "dashboard"; render(); };
   document.getElementById("tab-datastudio").onclick = function () { state.tab = "datastudio"; render(); };
+  document.getElementById("tab-companies").onclick = function () { state.tab = "companies"; render(); };
   render();
 })();

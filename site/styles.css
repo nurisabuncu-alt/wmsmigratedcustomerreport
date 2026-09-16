@@ -78,6 +78,12 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   z-index: 1;
 }
 .client-chart { background: #fffbeb; }
+.status-migrated { border-color: #1a7f37; }
+.status-migrating { border-color: #0969da; }
+.status-signed { border-color: #8250df; }
+.status-negotiating, .status-discussing { border-color: #9a6700; }
+.status-churning, .status-churned { border-color: #cf222e; }
+textarea { font: inherit; padding: 8px; border: 1px solid var(--line); border-radius: 6px; }
 .banner {
   background: #fff8c5;
   border-bottom: 1px solid #d4a72c;
