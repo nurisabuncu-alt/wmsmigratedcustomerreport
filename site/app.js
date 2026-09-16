@@ -880,7 +880,10 @@
     var scopeCreated = seriesSum(scopeRows, "created");
     var scopeShipped = seriesSum(scopeRows, "shipped");
     var monthLabels = MONTH_LABELS.slice(from, to + 1);
-    var allStatusCompany = state.company === "all" ? inDatabaseAll : inDatabaseAll.filter(function (r) { return r.company === state.company; });
+    // Ignores the Status filter, but stays on the WMS company list so internal
+    // and test accounts never inflate the company count.
+    var rosterScoped = rowsForStatus(inDatabaseAll, "roster");
+    var allStatusCompany = state.company === "all" ? rosterScoped : rosterScoped.filter(function (r) { return r.company === state.company; });
     var allStatusRows = state.client === "all" ? allStatusCompany : allStatusCompany.filter(function (r) { return r.client === state.client; });
     var allCreated = seriesSum(allStatusRows, "created").slice(from, to + 1);
     var allShipped = seriesSum(allStatusRows, "shipped").slice(from, to + 1);
@@ -928,7 +931,7 @@
     root.appendChild(hAll);
     var allNote = document.createElement("p");
     allNote.className = "muted";
-    allNote.textContent = "Ignores Status. Includes every company matching Database, Company, Client, and period, across all WMS list statuses.";
+    allNote.textContent = "Ignores the Status filter, but counts only companies on the WMS company list. Follows Database, Company, Client, and period.";
     root.appendChild(allNote);
     var boxA = document.createElement("div");
     boxA.className = "chart-box";
