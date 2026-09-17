@@ -479,6 +479,11 @@
     d.querySelector(".l").textContent = label;
     return d;
   }
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"]/g, function (c) {
+      return c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&quot;";
+    });
+  }
   function table(headers, rows, alignRightFrom) {
     var t = document.createElement("table");
     var thead = document.createElement("thead");
@@ -955,7 +960,6 @@
     box.appendChild(cv);
     root.appendChild(box);
     addChart(cv, ordersByCompanyCombo(MONTH_LABELS, migratedShipped, migratedCreated, migratedCompanies));
-    appendMigratedCoverage(root);
 
     // One row per account with the months pivoted across the top, so reading a
     // client over time means scrolling right instead of hunting through a row
@@ -1012,61 +1016,46 @@
     var pBody = document.createElement("tbody");
     pivot.appendChild(pBody);
     rawWrap.appendChild(pivot);
-    // Every account across every month is far too many cells to build at once,
-    // so rows arrive in pages on demand.
-    var RAW_PAGE = 250;
-    var shown = 0;
-    var moreWrap = document.createElement("div");
-    moreWrap.className = "filters";
-    var more = document.createElement("button");
-    more.className = "tab";
-    more.type = "button";
-    moreWrap.appendChild(more);
-    root.appendChild(moreWrap);
-    function labelCell(cls, text) {
-      var td = document.createElement("td");
-      td.className = cls;
-      td.textContent = text;
-      td.title = text;
-      return td;
+    // Hundreds of thousands of cells go in at once, so the rows are assembled as
+    // one HTML string; creating each cell through the DOM API instead is slow
+    // enough to hang the tab.
+    function cellText(value) {
+      return value > 0 ? value.toLocaleString() : value === 0 ? "0" : "-";
     }
-    function measureCell(value, isGroupStart) {
-      var td = document.createElement("td");
-      td.className = isGroupStart ? "num grp-start" : "num";
-      td.textContent = value > 0 ? value.toLocaleString() : value === 0 ? "0" : "-";
-      return td;
-    }
-    function showMoreRows() {
-      var next = Math.min(shown + RAW_PAGE, pivotRows.length);
-      var frag = document.createDocumentFragment();
-      for (var i = shown; i < next; i++) {
-        var row = pivotRows[i];
-        var prev = i > 0 ? pivotRows[i - 1] : null;
-        var tr = document.createElement("tr");
-        // Repeat the company on continuation rows, dimmed, so vertical scrolling
-        // never leaves a client without its company.
-        var repeat = prev && prev.company === row.company;
-        tr.appendChild(labelCell(repeat ? "lbl1 dim" : "lbl1", row.company));
-        tr.appendChild(labelCell("lbl2", row.client || "-"));
-        tr.appendChild(labelCell("lbl3", row.db));
-        for (var m = from; m <= to; m++) {
-          var active = row.created[m] > 0 || row.shipped[m] > 0 || row.clients[m] > 0;
-          tr.appendChild(measureCell(active ? row.shipped[m] : -1, true));
-          tr.appendChild(measureCell(active ? row.created[m] : -1, false));
-        }
-        frag.appendChild(tr);
+    var html = [];
+    var totalShipped = [];
+    var totalCreated = [];
+    for (var t0 = from; t0 <= to; t0++) { totalShipped.push(0); totalCreated.push(0); }
+    pivotRows.forEach(function (row, i) {
+      var prev = i > 0 ? pivotRows[i - 1] : null;
+      // Repeat the company on continuation rows, dimmed, so vertical scrolling
+      // never leaves a client without its company.
+      var repeat = prev && prev.company === row.company;
+      var company = escapeHtml(row.company);
+      var client = escapeHtml(row.client || "-");
+      html.push("<tr><td class=\"lbl1", repeat ? " dim" : "", "\" title=\"", company, "\">", company,
+        "</td><td class=\"lbl2\" title=\"", client, "\">", client,
+        "</td><td class=\"lbl3\">", escapeHtml(row.db), "</td>");
+      for (var m = from; m <= to; m++) {
+        var active = row.created[m] > 0 || row.shipped[m] > 0 || row.clients[m] > 0;
+        totalShipped[m - from] += row.shipped[m];
+        totalCreated[m - from] += row.created[m];
+        html.push("<td class=\"num grp-start\">", cellText(active ? row.shipped[m] : -1),
+          "</td><td class=\"num\">", cellText(active ? row.created[m] : -1), "</td>");
       }
-      pBody.appendChild(frag);
-      shown = next;
-      rawNote.textContent = pivotRows.length.toLocaleString() + " accounts matching all active filters, one row per company and client. " +
-        "Months run across the top — scroll right for later months. Showing " + shown.toLocaleString() + " of " +
-        pivotRows.length.toLocaleString() + ".";
-      var remaining = pivotRows.length - shown;
-      more.textContent = "Show " + Math.min(RAW_PAGE, remaining).toLocaleString() + " more accounts";
-      moreWrap.style.display = remaining > 0 ? "" : "none";
+      html.push("</tr>");
+    });
+    var totalHtml = ["<tr class=\"total\"><td class=\"lbl1\">Total</td><td class=\"lbl2\">" +
+      pivotRows.length.toLocaleString() + " accounts</td><td class=\"lbl3\"></td>"];
+    for (var ti = 0; ti < totalShipped.length; ti++) {
+      totalHtml.push("<td class=\"num grp-start\">", cellText(totalShipped[ti]),
+        "</td><td class=\"num\">", cellText(totalCreated[ti]), "</td>");
     }
-    more.onclick = showMoreRows;
-    showMoreRows();
+    totalHtml.push("</tr>");
+    pBody.innerHTML = totalHtml.join("") + html.join("");
+    rawNote.textContent = pivotRows.length.toLocaleString() + " accounts matching all active filters, one row per company and client, " +
+      "all rows shown. Months run across the top — scroll right for later months. The Total row sums every account in view.";
+    appendMigratedCoverage(root);
   }
 
   function renderCompanyList(root) {
