@@ -77,6 +77,28 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: var(--card);
   z-index: 1;
 }
+/* Month-pivoted raw data: frozen account columns on the left, two stacked
+   header rows on top, so both stay put while the months scroll sideways. */
+.pivot { width: auto; min-width: 100%; font-size: 12px; }
+.pivot th, .pivot td { white-space: nowrap; height: 28px; }
+.pivot thead th { position: sticky; background: var(--card); z-index: 2; }
+.pivot thead tr:first-child th { top: 0; }
+.pivot thead tr:nth-child(2) th { top: 28px; }
+.pivot .lbl1, .pivot .lbl2, .pivot .lbl3 {
+  position: sticky;
+  background: var(--card);
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pivot .lbl1 { left: 0; min-width: 150px; max-width: 150px; font-weight: 600; }
+.pivot .lbl2 { left: 150px; min-width: 190px; max-width: 190px; }
+.pivot .lbl3 { left: 340px; min-width: 120px; max-width: 120px; border-right: 1px solid var(--line); }
+.pivot thead .lbl1, .pivot thead .lbl2, .pivot thead .lbl3 { z-index: 3; }
+.pivot td.lbl1.dim { font-weight: 400; color: var(--muted); }
+.pivot .grp { text-align: center; border-left: 1px solid var(--line); }
+.pivot .grp-start { border-left: 1px solid var(--line); }
+.pivot tbody tr:hover td { background: #f6f8fa; }
 .client-chart { background: #fffbeb; }
 .status-migrated { border-color: #1a7f37; }
 .status-migrating { border-color: #0969da; }

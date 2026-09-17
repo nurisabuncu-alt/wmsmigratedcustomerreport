@@ -957,25 +957,15 @@
     addChart(cv, ordersByCompanyCombo(MONTH_LABELS, migratedShipped, migratedCreated, migratedCompanies));
     appendMigratedCoverage(root);
 
-    var rawRows = [];
-    for (var monthIndex = to; monthIndex >= from; monthIndex--) {
-      scopeRows.forEach(function (r) {
-        var createdValue = r.created[monthIndex];
-        var shippedValue = r.shipped[monthIndex];
-        var clientValue = r.clients[monthIndex];
-        if (createdValue || shippedValue || clientValue) {
-          rawRows.push([
-            MONTH_LABELS[monthIndex],
-            r.db,
-            r.company,
-            r.client || "-",
-            createdValue.toLocaleString(),
-            shippedValue.toLocaleString(),
-            clientValue.toLocaleString(),
-          ]);
-        }
-      });
-    }
+    // One row per account with the months pivoted across the top, so reading a
+    // client over time means scrolling right instead of hunting through a row
+    // per month.
+    var pivotRows = scopeRows.filter(function (r) { return hasVolumeInRange(r, from, to); }).slice().sort(function (a, b) {
+      if (a.company !== b.company) return a.company < b.company ? -1 : 1;
+      var ac = a.client || "", bc = b.client || "";
+      if (ac !== bc) return ac < bc ? -1 : 1;
+      return a.db < b.db ? -1 : a.db > b.db ? 1 : 0;
+    });
     var hRaw = document.createElement("h2");
     hRaw.textContent = "Raw monthly data";
     root.appendChild(hRaw);
@@ -985,9 +975,46 @@
     var rawWrap = document.createElement("div");
     rawWrap.className = "scroll raw-data";
     root.appendChild(rawWrap);
-    // Building every matching row at once locks up the browser on wide filters,
-    // so the table grows in pages on demand.
-    var RAW_PAGE = 500;
+    var pivot = document.createElement("table");
+    pivot.className = "pivot";
+    var pHead = document.createElement("thead");
+    var monthRow = document.createElement("tr");
+    ["lbl1", "lbl2", "lbl3"].forEach(function (cls) {
+      var th = document.createElement("th");
+      th.className = cls;
+      monthRow.appendChild(th);
+    });
+    var measureRow = document.createElement("tr");
+    [["lbl1", "Company"], ["lbl2", "Client"], ["lbl3", "Database"]].forEach(function (pair) {
+      var th = document.createElement("th");
+      th.className = pair[0];
+      th.textContent = pair[1];
+      measureRow.appendChild(th);
+    });
+    for (var mi = from; mi <= to; mi++) {
+      var groupTh = document.createElement("th");
+      groupTh.className = "grp";
+      groupTh.colSpan = 2;
+      groupTh.textContent = MONTH_LABELS[mi];
+      monthRow.appendChild(groupTh);
+      var shippedTh = document.createElement("th");
+      shippedTh.className = "num grp-start";
+      shippedTh.textContent = "OrderShippedCount";
+      measureRow.appendChild(shippedTh);
+      var createdTh = document.createElement("th");
+      createdTh.className = "num";
+      createdTh.textContent = "OrderCreatedCount";
+      measureRow.appendChild(createdTh);
+    }
+    pHead.appendChild(monthRow);
+    pHead.appendChild(measureRow);
+    pivot.appendChild(pHead);
+    var pBody = document.createElement("tbody");
+    pivot.appendChild(pBody);
+    rawWrap.appendChild(pivot);
+    // Every account across every month is far too many cells to build at once,
+    // so rows arrive in pages on demand.
+    var RAW_PAGE = 250;
     var shown = 0;
     var moreWrap = document.createElement("div");
     moreWrap.className = "filters";
@@ -996,28 +1023,46 @@
     more.type = "button";
     moreWrap.appendChild(more);
     root.appendChild(moreWrap);
-    var rawTable = table(["Month", "Database", "Company", "Client", "Created", "Shipped", "Clients"], [], 4);
-    var rawBody = rawTable.querySelector("tbody");
-    rawWrap.appendChild(rawTable);
+    function labelCell(cls, text) {
+      var td = document.createElement("td");
+      td.className = cls;
+      td.textContent = text;
+      td.title = text;
+      return td;
+    }
+    function measureCell(value, isGroupStart) {
+      var td = document.createElement("td");
+      td.className = isGroupStart ? "num grp-start" : "num";
+      td.textContent = value > 0 ? value.toLocaleString() : value === 0 ? "0" : "-";
+      return td;
+    }
     function showMoreRows() {
-      var next = Math.min(shown + RAW_PAGE, rawRows.length);
+      var next = Math.min(shown + RAW_PAGE, pivotRows.length);
       var frag = document.createDocumentFragment();
       for (var i = shown; i < next; i++) {
+        var row = pivotRows[i];
+        var prev = i > 0 ? pivotRows[i - 1] : null;
         var tr = document.createElement("tr");
-        rawRows[i].forEach(function (cell, ci) {
-          var td = document.createElement("td");
-          td.textContent = cell;
-          if (ci >= 4) td.className = "num";
-          tr.appendChild(td);
-        });
+        // Repeat the company on continuation rows, dimmed, so vertical scrolling
+        // never leaves a client without its company.
+        var repeat = prev && prev.company === row.company;
+        tr.appendChild(labelCell(repeat ? "lbl1 dim" : "lbl1", row.company));
+        tr.appendChild(labelCell("lbl2", row.client || "-"));
+        tr.appendChild(labelCell("lbl3", row.db));
+        for (var m = from; m <= to; m++) {
+          var active = row.created[m] > 0 || row.shipped[m] > 0 || row.clients[m] > 0;
+          tr.appendChild(measureCell(active ? row.shipped[m] : -1, true));
+          tr.appendChild(measureCell(active ? row.created[m] : -1, false));
+        }
         frag.appendChild(tr);
       }
-      rawBody.appendChild(frag);
+      pBody.appendChild(frag);
       shown = next;
-      rawNote.textContent = rawRows.length.toLocaleString() + " rows matching all active filters. Newest month first. Showing " +
-        shown.toLocaleString() + " of " + rawRows.length.toLocaleString() + ".";
-      var remaining = rawRows.length - shown;
-      more.textContent = "Show " + Math.min(RAW_PAGE, remaining).toLocaleString() + " more rows";
+      rawNote.textContent = pivotRows.length.toLocaleString() + " accounts matching all active filters, one row per company and client. " +
+        "Months run across the top — scroll right for later months. Showing " + shown.toLocaleString() + " of " +
+        pivotRows.length.toLocaleString() + ".";
+      var remaining = pivotRows.length - shown;
+      more.textContent = "Show " + Math.min(RAW_PAGE, remaining).toLocaleString() + " more accounts";
       moreWrap.style.display = remaining > 0 ? "" : "none";
     }
     more.onclick = showMoreRows;
