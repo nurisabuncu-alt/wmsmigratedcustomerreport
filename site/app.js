@@ -963,7 +963,9 @@
 
     // One row per account with the months pivoted across the top, so reading a
     // client over time means scrolling right instead of hunting through a row
-    // per month.
+    // per month. The body is the heaviest thing on the page by far, so it is
+    // built only on request, in chunks, and every other dashlet stays usable
+    // while it fills in.
     var pivotRows = scopeRows.filter(function (r) { return hasVolumeInRange(r, from, to); }).slice().sort(function (a, b) {
       if (a.company !== b.company) return a.company < b.company ? -1 : 1;
       var ac = a.client || "", bc = b.client || "";
@@ -1016,45 +1018,102 @@
     var pBody = document.createElement("tbody");
     pivot.appendChild(pBody);
     rawWrap.appendChild(pivot);
-    // Hundreds of thousands of cells go in at once, so the rows are assembled as
-    // one HTML string; creating each cell through the DOM API instead is slow
-    // enough to hang the tab.
     function cellText(value) {
       return value > 0 ? value.toLocaleString() : value === 0 ? "0" : "-";
     }
-    var html = [];
+    // Month totals come straight from the numbers, so the summary row is there
+    // before a single account row has been drawn.
     var totalShipped = [];
     var totalCreated = [];
     for (var t0 = from; t0 <= to; t0++) { totalShipped.push(0); totalCreated.push(0); }
-    pivotRows.forEach(function (row, i) {
-      var prev = i > 0 ? pivotRows[i - 1] : null;
-      // Repeat the company on continuation rows, dimmed, so vertical scrolling
-      // never leaves a client without its company.
-      var repeat = prev && prev.company === row.company;
-      var company = escapeHtml(row.company);
-      var client = escapeHtml(row.client || "-");
-      html.push("<tr><td class=\"lbl1", repeat ? " dim" : "", "\" title=\"", company, "\">", company,
-        "</td><td class=\"lbl2\" title=\"", client, "\">", client,
-        "</td><td class=\"lbl3\">", escapeHtml(row.db), "</td>");
+    pivotRows.forEach(function (row) {
       for (var m = from; m <= to; m++) {
-        var active = row.created[m] > 0 || row.shipped[m] > 0 || row.clients[m] > 0;
         totalShipped[m - from] += row.shipped[m];
         totalCreated[m - from] += row.created[m];
-        html.push("<td class=\"num grp-start\">", cellText(active ? row.shipped[m] : -1),
-          "</td><td class=\"num\">", cellText(active ? row.created[m] : -1), "</td>");
       }
-      html.push("</tr>");
     });
+    function accountsLabel(n) {
+      return n.toLocaleString() + (n === 1 ? " account" : " accounts");
+    }
     var totalHtml = ["<tr class=\"total\"><td class=\"lbl1\">Total</td><td class=\"lbl2\">" +
-      pivotRows.length.toLocaleString() + " accounts</td><td class=\"lbl3\"></td>"];
+      accountsLabel(pivotRows.length) + "</td><td class=\"lbl3\"></td>"];
     for (var ti = 0; ti < totalShipped.length; ti++) {
       totalHtml.push("<td class=\"num grp-start\">", cellText(totalShipped[ti]),
         "</td><td class=\"num\">", cellText(totalCreated[ti]), "</td>");
     }
     totalHtml.push("</tr>");
-    pBody.innerHTML = totalHtml.join("") + html.join("");
-    rawNote.textContent = pivotRows.length.toLocaleString() + " accounts matching all active filters, one row per company and client, " +
-      "all rows shown. Months run across the top — scroll right for later months. The Total row sums every account in view.";
+    var totalRowHtml = totalHtml.join("");
+    pBody.innerHTML = totalRowHtml;
+
+    // Cells are assembled as HTML strings; creating each one through the DOM API
+    // is slow enough on its own to hang the tab.
+    function rowHtml(row, prev) {
+      // Repeat the company on continuation rows, dimmed, so vertical scrolling
+      // never leaves a client without its company.
+      var repeat = prev && prev.company === row.company;
+      var company = escapeHtml(row.company);
+      var client = escapeHtml(row.client || "-");
+      var parts = ["<tr><td class=\"lbl1", repeat ? " dim" : "", "\" title=\"", company, "\">", company,
+        "</td><td class=\"lbl2\" title=\"", client, "\">", client,
+        "</td><td class=\"lbl3\">", escapeHtml(row.db), "</td>"];
+      for (var m = from; m <= to; m++) {
+        var active = row.created[m] > 0 || row.shipped[m] > 0 || row.clients[m] > 0;
+        parts.push("<td class=\"num grp-start\">", cellText(active ? row.shipped[m] : -1),
+          "</td><td class=\"num\">", cellText(active ? row.created[m] : -1), "</td>");
+      }
+      parts.push("</tr>");
+      return parts.join("");
+    }
+    var CHUNK = 300;
+    var built = 0;
+    var total = pivotRows.length;
+    var loadWrap = document.createElement("div");
+    loadWrap.className = "filters";
+    var loadBtn = document.createElement("button");
+    loadBtn.className = "tab";
+    loadBtn.type = "button";
+    loadWrap.appendChild(loadBtn);
+    root.appendChild(loadWrap);
+    function idleNote() {
+      rawNote.textContent = accountsLabel(total) + " match the filters, and the Total row above sums their orders per month. " +
+        "The account rows are held back so the charts and filters stay quick — load them when you need the detail.";
+      loadBtn.textContent = "Load " + total.toLocaleString() + (total === 1 ? " account row" : " account rows");
+      loadBtn.disabled = total === 0;
+    }
+    function loadedNote() {
+      rawNote.textContent = accountsLabel(total) + " matching all active filters, one row per company and client, all rows shown. " +
+        "Months run across the top — scroll right for later months. Changing a filter clears the rows again.";
+      loadBtn.textContent = "Hide account rows";
+      loadBtn.disabled = false;
+    }
+    function buildChunk() {
+      // A filter change replaces the whole tab, so an in-flight build of the old
+      // table has to stop rather than paint into a detached node.
+      if (!document.body.contains(pBody)) return;
+      var end = Math.min(built + CHUNK, total);
+      var parts = [];
+      for (var i = built; i < end; i++) parts.push(rowHtml(pivotRows[i], i > 0 ? pivotRows[i - 1] : null));
+      pBody.insertAdjacentHTML("beforeend", parts.join(""));
+      built = end;
+      if (built < total) {
+        rawNote.textContent = "Loading account rows: " + built.toLocaleString() + " of " + total.toLocaleString() + ".";
+        loadBtn.textContent = "Loading " + Math.round((built / total) * 100) + "%";
+        setTimeout(buildChunk, 0);
+      } else {
+        loadedNote();
+      }
+    }
+    loadBtn.onclick = function () {
+      if (built >= total && total > 0) {
+        pBody.innerHTML = totalRowHtml;
+        built = 0;
+        idleNote();
+        return;
+      }
+      loadBtn.disabled = true;
+      buildChunk();
+    };
+    idleNote();
     appendMigratedCoverage(root);
   }
 
