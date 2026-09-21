@@ -1074,15 +1074,22 @@
     loadBtn.type = "button";
     loadWrap.appendChild(loadBtn);
     root.appendChild(loadWrap);
-    function idleNote() {
+    var hiddenByUser = false;
+    function hiddenNote() {
       rawNote.textContent = accountsLabel(total) + " match the filters, and the Total row above sums their orders per month. " +
-        "The account rows are held back so the charts and filters stay quick — load them when you need the detail.";
+        "Account rows are hidden — load them when you need the detail.";
       loadBtn.textContent = "Load " + total.toLocaleString() + (total === 1 ? " account row" : " account rows");
       loadBtn.disabled = total === 0;
     }
+    function waitingNote() {
+      rawNote.textContent = accountsLabel(total) + " match the filters. The Total row above sums their orders per month, and the " +
+        "account rows fill in on their own once the charts are drawn — the filters stay usable while they arrive.";
+      loadBtn.textContent = "Loading account rows…";
+      loadBtn.disabled = true;
+    }
     function loadedNote() {
       rawNote.textContent = accountsLabel(total) + " matching all active filters, one row per company and client, all rows shown. " +
-        "Months run across the top — scroll right for later months. Changing a filter clears the rows again.";
+        "Months run across the top — scroll right for later months.";
       loadBtn.textContent = "Hide account rows";
       loadBtn.disabled = false;
     }
@@ -1103,18 +1110,32 @@
         loadedNote();
       }
     }
+    function startLoad() {
+      if (hiddenByUser || built > 0 || total === 0) return;
+      loadBtn.disabled = true;
+      buildChunk();
+    }
     loadBtn.onclick = function () {
       if (built >= total && total > 0) {
         pBody.innerHTML = totalRowHtml;
         built = 0;
-        idleNote();
+        hiddenByUser = true;
+        hiddenNote();
         return;
       }
-      loadBtn.disabled = true;
-      buildChunk();
+      hiddenByUser = false;
+      startLoad();
     };
-    idleNote();
+    if (total === 0) hiddenNote();
+    else waitingNote();
     appendMigratedCoverage(root);
+    // Hand the browser a moment to paint the charts and the coverage table
+    // first; a burst of filter changes then throws away its pending builds
+    // before they do any work.
+    if (total > 0) {
+      if (window.requestIdleCallback) requestIdleCallback(startLoad, { timeout: 800 });
+      else setTimeout(startLoad, 300);
+    }
   }
 
   function renderCompanyList(root) {
