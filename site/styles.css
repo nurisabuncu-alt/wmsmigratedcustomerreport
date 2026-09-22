@@ -108,6 +108,55 @@ th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .pivot .grp { text-align: center; border-left: 1px solid var(--line); }
 .pivot .grp-start { border-left: 1px solid var(--line); }
 .pivot tbody tr:hover td { background: #f6f8fa; }
+/* Migrated coverage report: own card, colour-coded so gaps stand out. */
+.coverage {
+  margin: 34px 0 12px;
+  padding: 18px 18px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: 0 1px 4px rgba(27, 31, 35, 0.07);
+}
+.coverage h2 { margin: 0 0 6px; font-size: 20px; }
+.coverage-stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin: 14px 0 10px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 12px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.legend i.badge { width: 14px; height: 14px; padding: 0; border-radius: 4px; }
+.cov-scroll { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.cov-table { width: auto; min-width: 100%; }
+.cov-table th, .cov-table td { white-space: nowrap; }
+.cov-table thead th { position: sticky; top: 0; background: var(--card); z-index: 2; }
+.cov-table .name {
+  position: sticky;
+  left: 0;
+  background: var(--card);
+  font-weight: 600;
+  min-width: 210px;
+  border-right: 1px solid var(--line);
+  z-index: 1;
+}
+.cov-table thead .name { z-index: 3; }
+.cov-table tbody tr:hover td { background: #f6f8fa; }
+.cov-table tfoot td {
+  position: sticky;
+  bottom: 0;
+  background: #f6f8fa;
+  font-weight: 600;
+  border-top: 2px solid var(--line);
+}
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.badge.both { background: #dafbe1; color: #116329; }
+.badge.created { background: #fff8c5; color: #7d4e00; }
+.badge.shipped { background: #ddf4ff; color: #0a4f9c; }
+.badge.none { background: #f1f3f5; color: #6e7781; }
 .client-chart { background: #fffbeb; }
 .status-migrated { border-color: #1a7f37; }
 .status-migrating { border-color: #0969da; }

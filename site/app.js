@@ -161,30 +161,108 @@
     });
     return { from: from, to: to, rows: rows };
   }
-  function coverageCell(month) {
-    if (month.created && month.shipped) return "Created + shipped";
-    if (month.created) return "Created only";
-    if (month.shipped) return "Shipped only";
-    return "No data";
+  var COVERAGE_STATES = {
+    both: "Created + shipped",
+    created: "Created only",
+    shipped: "Shipped only",
+    none: "No data",
+  };
+  function coverageKey(month) {
+    if (month.created && month.shipped) return "both";
+    if (month.created) return "created";
+    if (month.shipped) return "shipped";
+    return "none";
   }
   function appendMigratedCoverage(root) {
     var data = migratedMonthlyCoverage();
+    var monthLabels = MONTH_LABELS.slice(data.from, data.to + 1);
+    // Own card with colour-coded badges: this is the report people scan for gaps,
+    // so it should read at a glance instead of blending into the tables above.
+    var section = document.createElement("section");
+    section.className = "coverage";
+    root.appendChild(section);
     var h = document.createElement("h2");
     h.textContent = "Migrated companies - order data by month (last 5 months)";
-    root.appendChild(h);
+    section.appendChild(h);
     var note = document.createElement("p");
     note.className = "muted";
-    var span = (MONTH_LABELS[data.from] || "") + " – " + (MONTH_LABELS[data.to] || "");
+    var span = (monthLabels[0] || "") + " – " + (monthLabels[monthLabels.length - 1] || "");
     if (MONTHS[data.to] === "2026-09") span += " (September partial through Sep 22)";
     note.textContent = "Static report, not affected by the filters. Every company with status Migrated on the WMS list, and whether any created or shipped orders exist in each month (" + span + ").";
-    root.appendChild(note);
-    var headers = ["Company"].concat(MONTH_LABELS.slice(data.from, data.to + 1));
+    section.appendChild(note);
+
+    var latest = data.rows.map(function (r) { return coverageKey(r.months[r.months.length - 1]); });
+    var latestBoth = latest.filter(function (k) { return k === "both"; }).length;
+    var latestNone = latest.filter(function (k) { return k === "none"; }).length;
+    var stats = document.createElement("div");
+    stats.className = "stats coverage-stats";
+    stats.appendChild(stat(String(data.rows.length), "Migrated companies"));
+    stats.appendChild(stat(String(latestBoth), "Created + shipped in " + (monthLabels[monthLabels.length - 1] || ""), "ok"));
+    stats.appendChild(stat(String(latestNone), "No data in " + (monthLabels[monthLabels.length - 1] || ""), latestNone ? "bad" : undefined));
+    section.appendChild(stats);
+
+    var legend = document.createElement("div");
+    legend.className = "legend";
+    Object.keys(COVERAGE_STATES).forEach(function (key) {
+      var item = document.createElement("span");
+      var swatch = document.createElement("i");
+      swatch.className = "badge " + key;
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(COVERAGE_STATES[key]));
+      legend.appendChild(item);
+    });
+    section.appendChild(legend);
+
+    var t = document.createElement("table");
+    t.className = "cov-table";
+    var thead = document.createElement("thead");
+    var htr = document.createElement("tr");
+    ["Company"].concat(monthLabels).forEach(function (label, i) {
+      var th = document.createElement("th");
+      th.className = i === 0 ? "name" : "";
+      th.textContent = label;
+      htr.appendChild(th);
+    });
+    thead.appendChild(htr);
+    t.appendChild(thead);
+    var tb = document.createElement("tbody");
+    data.rows.forEach(function (r) {
+      var tr = document.createElement("tr");
+      var name = document.createElement("td");
+      name.className = "name";
+      name.textContent = r.company;
+      tr.appendChild(name);
+      r.months.forEach(function (month) {
+        var td = document.createElement("td");
+        var key = coverageKey(month);
+        var badge = document.createElement("span");
+        badge.className = "badge " + key;
+        badge.textContent = COVERAGE_STATES[key];
+        td.appendChild(badge);
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb);
+    var tfoot = document.createElement("tfoot");
+    var ftr = document.createElement("tr");
+    var flabel = document.createElement("td");
+    flabel.className = "name";
+    flabel.textContent = "Created + shipped";
+    ftr.appendChild(flabel);
+    monthLabels.forEach(function (label, i) {
+      var count = 0;
+      data.rows.forEach(function (r) { if (coverageKey(r.months[i]) === "both") count += 1; });
+      var td = document.createElement("td");
+      td.textContent = count + " of " + data.rows.length;
+      ftr.appendChild(td);
+    });
+    tfoot.appendChild(ftr);
+    t.appendChild(tfoot);
     var wrap = document.createElement("div");
-    wrap.className = "scroll";
-    wrap.appendChild(table(headers, data.rows.map(function (r) {
-      return [r.company].concat(r.months.map(coverageCell));
-    }), headers.length));
-    root.appendChild(wrap);
+    wrap.className = "scroll cov-scroll";
+    wrap.appendChild(t);
+    section.appendChild(wrap);
   }
   function companyPeakClients(rows, from, to) {
     var months = {};
