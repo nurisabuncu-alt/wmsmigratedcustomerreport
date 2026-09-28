@@ -40,7 +40,7 @@
     return { year: p[0], q: Math.ceil(p[1] / 3) };
   }
 
-  var ALL_TIME = { value: "all", label: "All time (Jun 2024 - Sep 22, 2026)", from: 0, to: MONTHS.length - 1 };
+  var ALL_TIME = { value: "all", label: "All time (Jun 2024 - Sep 28, 2026)", from: 0, to: MONTHS.length - 1 };
   var QUARTER_RANGES = [];
   (function buildQuarters() {
     var i = 0;
@@ -187,7 +187,7 @@
     var note = document.createElement("p");
     note.className = "muted";
     var span = (monthLabels[0] || "") + " – " + (monthLabels[monthLabels.length - 1] || "");
-    if (MONTHS[data.to] === "2026-09") span += " (September partial through Sep 22)";
+    if (MONTHS[data.to] === "2026-09") span += " (September partial through Sep 28)";
     note.textContent = "Static report, not affected by the filters. Every company with status Migrated on the WMS list, and whether any created or shipped orders exist in each month (" + span + ").";
     section.appendChild(note);
 
@@ -697,7 +697,7 @@
 
     var intro = document.createElement("p");
     intro.className = "lede";
-    intro.textContent = "Order created vs shipped across three servers and seven databases, Jun 2024 - Sep 22, 2026. SQL was extracted without a COMP_ID filter; the default graph scope is the WMS company list. Every figure below follows the filters.";
+    intro.textContent = "Order created vs shipped across three servers and seven databases, Jun 2024 - Sep 28, 2026. SQL was extracted without a COMP_ID filter; the default graph scope is the WMS company list. Every figure below follows the filters.";
     root.appendChild(intro);
     var pills = document.createElement("div");
     pills.className = "pills";
@@ -757,7 +757,7 @@
 
     var cap = document.createElement("p");
     cap.className = "muted";
-    cap.textContent = "Filters: Status, Database, Company, Client, and either Quarter or Month. Default Status includes every company on the WMS list. September 2026 is partial through Sep 22. " + scopeLabel + " | " + selectedRange.label + " | " + state.status;
+    cap.textContent = "Filters: Status, Database, Company, Client, and either Quarter or Month. Default Status includes every company on the WMS list. September 2026 is partial through Sep 28. " + scopeLabel + " | " + selectedRange.label + " | " + state.status;
     root.appendChild(cap);
 
     var h2 = document.createElement("h2");
