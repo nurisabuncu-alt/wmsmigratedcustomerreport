@@ -1698,6 +1698,20 @@ function sumRange(values: number[], from: number, to: number): number {
   return total;
 }
 
+// Distinct companies with order activity in each month of the range. Many rows
+// share a company, so summing the per-row client counts would overcount.
+function activeCompaniesPerMonth(rows: EntityRow[], from: number, to: number): number[] {
+  const out: number[] = [];
+  for (let i = from; i <= to; i += 1) {
+    const seen = new Set<string>();
+    for (const row of rows) {
+      if (row.created[i] > 0 || row.shipped[i] > 0) seen.add(row.company);
+    }
+    out.push(seen.size);
+  }
+  return out;
+}
+
 // A single selected month leaves one category, which a line chart draws as a
 // lone dot, so fall back to bars whenever there is no trend to draw.
 function TrendChart({
@@ -2019,6 +2033,10 @@ function DataStudioTab() {
   const scopeCreated = useMemo(() => seriesSum(scopeRows, "created"), [scopeRows]);
   const scopeShipped = useMemo(() => seriesSum(scopeRows, "shipped"), [scopeRows]);
   const scopeClients = useMemo(() => seriesSum(scopeRows, "clients"), [scopeRows]);
+  const scopeCompanies = useMemo(
+    () => activeCompaniesPerMonth(scopeRows, from, to),
+    [scopeRows, from, to],
+  );
 
   const slice = (values: number[]) => values.slice(from, to + 1);
   const companyCount = new Set(scopeRows.map((r) => r.company)).size;
@@ -2130,55 +2148,50 @@ function DataStudioTab() {
       </Stack>
 
       <Stack gap={8}>
-        <H2>Migrated Account Order Shipped VS Created Count per Company per Month</H2>
+        <H2>Migrated Accounts Order Shipped VS Created Count per Company per Month</H2>
         <Text tone="tertiary">
           Source: MSSQL | {selectedRange.label} | {scopeLabel} | counts in orders.
-          This chart follows the filters above.
+          Company = distinct companies with order activity that month. The original
+          report puts Company on a secondary axis above the bars; the canvas chart
+          library has no dual axis, so it sits in its own panel directly above them.
         </Text>
+        <TrendChart
+          height={120}
+          categories={monthLabels}
+          series={[{ name: "Company", data: scopeCompanies, tone: "info" }]}
+        />
         <BarChart
           height={300}
           categories={monthLabels}
           series={[
-            { name: "OrderShippedCount", data: slice(scopeShipped), tone: "info" },
-            { name: "OrderCreatedCount", data: slice(scopeCreated), tone: "success" },
+            { name: "OrderShippedCount", data: slice(scopeShipped), tone: "warning" },
+            { name: "OrderCreatedCount", data: slice(scopeCreated) },
           ]}
         />
-        <TrendChart
-          height={150}
-          categories={monthLabels}
-          series={[{ name: "Client", data: slice(scopeClients), tone: "warning" }]}
-        />
-        <Text tone="tertiary">
-          Distinct Client count for the same selection. The original report puts
-          this on a secondary axis of the same chart; the canvas chart library has
-          no dual axis, so it is split into its own panel.
-        </Text>
       </Stack>
 
       <Divider />
 
       <Stack gap={8}>
-        <H2>All matching accounts - shipped vs created</H2>
+        <H2>All Matching Accounts Order Shipped VS Created Count per Company per Month</H2>
         <Text tone="tertiary">
           Source: MSSQL | {selectedRange.label} | {scopeLabel} | counts in orders.
-          This chart follows the same filters as the dashlets above.
+          Same Company line and order-count bars as above, for every row matching
+          the filters.
         </Text>
+        <TrendChart
+          height={120}
+          categories={monthLabels}
+          series={[{ name: "Company", data: scopeCompanies, tone: "info" }]}
+        />
         <BarChart
           height={300}
           categories={monthLabels}
           series={[
-            { name: "OrderShippedCount", data: slice(scopeShipped), tone: "info" },
-            { name: "OrderCreatedCount", data: slice(scopeCreated), tone: "success" },
+            { name: "OrderShippedCount", data: slice(scopeShipped), tone: "warning" },
+            { name: "OrderCreatedCount", data: slice(scopeCreated) },
           ]}
         />
-        <TrendChart
-          height={160}
-          categories={monthLabels}
-          series={[{ name: "Client count", data: slice(scopeClients), tone: "warning" }]}
-        />
-        <Text tone="tertiary">
-          Distinct client count for the same selection, on its own scale.
-        </Text>
       </Stack>
 
       <Stack gap={8}>
