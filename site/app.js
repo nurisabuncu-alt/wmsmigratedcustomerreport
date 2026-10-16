@@ -477,6 +477,7 @@
             },
           },
         },
+        animation: false,
         scales: {
           x: { grid: { display: false } },
           y: {
@@ -945,6 +946,198 @@
     root.appendChild(note);
   }
 
+  function loadExcelJs() {
+    if (window.ExcelJS) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      var script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js";
+      script.onload = function () { resolve(); };
+      script.onerror = function () { reject(new Error("Could not load the Excel exporter.")); };
+      document.head.appendChild(script);
+    });
+  }
+  function downloadBlob(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+  function paintCoverageCell(cell, key) {
+    var tones = {
+      both: ["FFDAFBE1", "FF116329"],
+      created: ["FFFFF8C5", "FF7D4E00"],
+      shipped: ["FFDDF4FF", "FF0A4F9C"],
+      none: ["FFF1F3F5", "FF6E7781"],
+    };
+    var tone = tones[key];
+    cell.value = COVERAGE_STATES[key];
+    cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: tone[0] } };
+    cell.font = { color: { argb: tone[1] }, bold: true, size: 11 };
+    cell.alignment = { horizontal: "center" };
+  }
+  function chartImageRows(chart) {
+    var height = (chart.canvas && chart.canvas.clientHeight) || 320;
+    return Math.ceil(height / 15) + 2;
+  }
+  function exportDataStudioWorkbook(pack) {
+    return loadExcelJs().then(function () {
+      var workbook = new ExcelJS.Workbook();
+      workbook.creator = "WMS migrated customer reporting";
+      var numFmt = "#,##0";
+
+      var chartsSheet = workbook.addWorksheet("Charts");
+      chartsSheet.getColumn(1).width = 42;
+      chartsSheet.getColumn(2).width = 28;
+      chartsSheet.getColumn(3).width = 22;
+      chartsSheet.getColumn(4).width = 22;
+      chartsSheet.getCell("A1").value = "Data Studio charts";
+      chartsSheet.getCell("A1").font = { bold: true, size: 16 };
+      chartsSheet.getCell("A2").value = pack.filterNote;
+      chartsSheet.getCell("A2").font = { color: { argb: "FF57606A" } };
+      ["OrderShippedCount", "OrderCreatedCount", "Total companies", "Total clients"].forEach(function (label, i) {
+        var cell = chartsSheet.getCell(4, i + 1);
+        cell.value = label;
+        cell.font = { bold: true };
+      });
+      [pack.shippedTotal, pack.createdTotal, pack.companyCount, pack.clientCount].forEach(function (value, i) {
+        var cell = chartsSheet.getCell(5, i + 1);
+        cell.value = value;
+        cell.numFmt = numFmt;
+        cell.font = { bold: true, size: 14 };
+      });
+
+      function placeChart(chart, heading, note, seriesLabels, shipped, created, companies, startRow) {
+        chartsSheet.getCell(startRow, 1).value = heading;
+        chartsSheet.getCell(startRow, 1).font = { bold: true, size: 13 };
+        chartsSheet.getCell(startRow + 1, 1).value = note;
+        chartsSheet.getCell(startRow + 1, 1).font = { color: { argb: "FF57606A" } };
+        var imageRow = startRow + 2;
+        var imageId = workbook.addImage({
+          base64: chart.toBase64Image().split(",")[1],
+          extension: "png",
+        });
+        var width = (chart.canvas && chart.canvas.clientWidth) || 1000;
+        var height = (chart.canvas && chart.canvas.clientHeight) || 320;
+        chartsSheet.addImage(imageId, {
+          tl: { col: 0, row: imageRow - 1 },
+          ext: { width: width, height: height },
+        });
+        var tableRow = imageRow + chartImageRows(chart);
+        ["Month", "OrderShippedCount", "OrderCreatedCount", "Companies"].forEach(function (label, i) {
+          var cell = chartsSheet.getCell(tableRow, i + 1);
+          cell.value = label;
+          cell.font = { bold: true };
+        });
+        seriesLabels.forEach(function (label, i) {
+          var row = chartsSheet.getRow(tableRow + 1 + i);
+          row.getCell(1).value = label;
+          row.getCell(2).value = shipped[i];
+          row.getCell(2).numFmt = numFmt;
+          row.getCell(3).value = created[i];
+          row.getCell(3).numFmt = numFmt;
+          row.getCell(4).value = companies[i];
+          row.getCell(4).numFmt = numFmt;
+        });
+        return tableRow + seriesLabels.length + 3;
+      }
+
+      var nextRow = placeChart(
+        pack.chartAll,
+        "All Matching Accounts Order Shipped VS Created Count per Company per Month",
+        "Ignores the Status filter, but counts only companies on the WMS company list. Follows Database, Company, Client, and period.",
+        pack.monthLabels, pack.allShipped, pack.allCreated, pack.allCompanies, 7
+      );
+      placeChart(
+        pack.chartMigrated,
+        "Migrated Accounts Order Shipped VS Created Count per Company per Month",
+        "Static report: Migrated companies only, every month in the snapshot. The filters do not change it.",
+        pack.allMonthLabels, pack.migratedShipped, pack.migratedCreated, pack.migratedCompanies, nextRow
+      );
+
+      var raw = workbook.addWorksheet("Raw monthly data");
+      raw.views = [{ state: "frozen", xSplit: 3, ySplit: 2 }];
+      raw.getColumn(1).width = 28;
+      raw.getColumn(2).width = 36;
+      raw.getColumn(3).width = 18;
+      var monthHeader = ["", "", ""];
+      var measureHeader = ["Company", "Client", "Database"];
+      for (var mi = pack.from; mi <= pack.to; mi++) {
+        monthHeader.push(MONTH_LABELS[mi], "");
+        measureHeader.push("OrderShippedCount", "OrderCreatedCount");
+        raw.getColumn(measureHeader.length - 1).width = 20;
+        raw.getColumn(measureHeader.length).width = 20;
+      }
+      raw.addRow(monthHeader);
+      raw.addRow(measureHeader);
+      for (var col = 4; col < monthHeader.length; col += 2) {
+        raw.mergeCells(1, col, 1, col + 1);
+        raw.getCell(1, col).alignment = { horizontal: "center" };
+        raw.getCell(1, col).font = { bold: true };
+      }
+      raw.getRow(2).font = { bold: true };
+      var totalValues = ["Total", pack.pivotRows.length + (pack.pivotRows.length === 1 ? " account" : " accounts"), ""];
+      for (var t = 0; t < pack.totalShipped.length; t++) {
+        totalValues.push(pack.totalShipped[t], pack.totalCreated[t]);
+      }
+      var totalRow = raw.addRow(totalValues);
+      totalRow.font = { bold: true };
+      totalRow.eachCell(function (cell, col) {
+        if (col >= 4) cell.numFmt = numFmt;
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF6F8FA" } };
+      });
+      pack.pivotRows.forEach(function (row) {
+        var values = [row.company, row.client || "-", row.db];
+        for (var m = pack.from; m <= pack.to; m++) {
+          var active = row.created[m] > 0 || row.shipped[m] > 0 || row.clients[m] > 0;
+          values.push(active ? row.shipped[m] : null, active ? row.created[m] : null);
+        }
+        var excelRow = raw.addRow(values);
+        excelRow.eachCell(function (cell, col) {
+          if (col >= 4 && typeof cell.value === "number") cell.numFmt = numFmt;
+        });
+      });
+
+      var coverage = workbook.addWorksheet("Migrated coverage");
+      var data = migratedMonthlyCoverage();
+      var monthLabels = MONTH_LABELS.slice(data.from, data.to + 1);
+      coverage.getColumn(1).width = 36;
+      coverage.getCell("A1").value = "Migrated companies - order data by month (last 5 months)";
+      coverage.getCell("A1").font = { bold: true, size: 16 };
+      var span = monthLabels[0] + " – " + monthLabels[monthLabels.length - 1];
+      if (MONTHS[data.to] === "2026-10") span += " (October partial through Oct 12)";
+      coverage.getCell("A2").value = "Static report, not affected by the filters. " + span + ".";
+      coverage.getCell("A2").font = { color: { argb: "FF57606A" } };
+      var header = coverage.addRow(["Company"].concat(monthLabels));
+      header.font = { bold: true };
+      data.rows.forEach(function (row) {
+        var excelRow = coverage.addRow([row.company]);
+        row.months.forEach(function (month, i) {
+          paintCoverageCell(excelRow.getCell(i + 2), coverageKey(month));
+        });
+      });
+      var foot = coverage.addRow(["Created + shipped"]);
+      monthLabels.forEach(function (label, i) {
+        var count = 0;
+        data.rows.forEach(function (row) { if (coverageKey(row.months[i]) === "both") count += 1; });
+        var cell = foot.getCell(i + 2);
+        cell.value = count + " of " + data.rows.length;
+        cell.font = { bold: true };
+      });
+      foot.getCell(1).font = { bold: true };
+      for (var c = 2; c <= monthLabels.length + 1; c++) coverage.getColumn(c).width = 20;
+      coverage.views = [{ state: "frozen", xSplit: 1, ySplit: 3 }];
+
+      return workbook.xlsx.writeBuffer();
+    }).then(function (buffer) {
+      downloadBlob(new Blob([buffer], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }), "WMS-Data-Studio-" + MONTHS[MONTHS.length - 1] + ".xlsx");
+    });
+  }
   function renderDataStudio(root) {
     var selectedRange = resolvePeriod(state.quarter, state.month);
     var from = selectedRange.from, to = selectedRange.to;
@@ -993,6 +1186,11 @@
       state.quarter = v === "none" ? "all" : "none";
       render();
     })));
+    var exportBtn = document.createElement("button");
+    exportBtn.className = "tab";
+    exportBtn.type = "button";
+    exportBtn.textContent = "Export Excel";
+    filters.appendChild(exportBtn);
     root.appendChild(filters);
 
     var stats = document.createElement("div");
@@ -1023,6 +1221,7 @@
     boxA.appendChild(cvA);
     root.appendChild(boxA);
     addChart(cvA, ordersByCompanyCombo(monthLabels, allShipped, allCreated, allCompanies));
+    var chartAll = charts[charts.length - 1];
 
     var h = document.createElement("h2");
     h.textContent = "Migrated Accounts Order Shipped VS Created Count per Company per Month";
@@ -1038,6 +1237,44 @@
     box.appendChild(cv);
     root.appendChild(box);
     addChart(cv, ordersByCompanyCombo(MONTH_LABELS, migratedShipped, migratedCreated, migratedCompanies));
+    var chartMigrated = charts[charts.length - 1];
+    exportBtn.onclick = function () {
+      exportBtn.disabled = true;
+      exportBtn.textContent = "Exporting…";
+      var period = resolvePeriod(state.quarter, state.month);
+      exportDataStudioWorkbook({
+        filterNote: "Filters: " + (state.status === "roster" ? "All companies on WMS list" : state.status) +
+          " | " + (state.db === "all" ? "All databases" : state.db) +
+          " | " + (state.company === "all" ? "All companies" : state.company) +
+          " | " + (state.client === "all" ? "All clients" : state.client) +
+          " | " + period.label + ". The All Matching chart ignores Status. The Migrated chart and coverage sheet ignore every filter.",
+        shippedTotal: sumRange(scopeShipped, from, to),
+        createdTotal: sumRange(scopeCreated, from, to),
+        companyCount: counts.companies,
+        clientCount: counts.clients,
+        chartAll: chartAll,
+        chartMigrated: chartMigrated,
+        monthLabels: monthLabels,
+        allShipped: allShipped,
+        allCreated: allCreated,
+        allCompanies: allCompanies,
+        allMonthLabels: MONTH_LABELS,
+        migratedShipped: migratedShipped,
+        migratedCreated: migratedCreated,
+        migratedCompanies: migratedCompanies,
+        from: from,
+        to: to,
+        pivotRows: pivotRows,
+        totalShipped: totalShipped,
+        totalCreated: totalCreated,
+      }).then(function () {
+        exportBtn.textContent = "Export Excel";
+        exportBtn.disabled = false;
+      }).catch(function () {
+        exportBtn.textContent = "Export failed — try again";
+        exportBtn.disabled = false;
+      });
+    };
 
     // One row per account with the months pivoted across the top, so reading a
     // client over time means scrolling right instead of hunting through a row
